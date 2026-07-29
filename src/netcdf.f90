@@ -1,0 +1,274 @@
+module netcdf
+    use, intrinsic :: iso_fortran_env, only: int32, real64
+    use fortio_netcdf_classic, only: classic_file_t, NC_BYTE, NC_CHAR, NC_SHORT, &
+                                    NC_INT, NC_FLOAT, NC_DOUBLE
+    use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
+                            FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE
+    implicit none
+    private
+
+    integer, parameter, public :: NF90_NOERR = FORTIO_SUCCESS
+    integer, parameter, public :: NF90_EBADID = FORTIO_ESTATE
+    integer, parameter, public :: NF90_ENOTVAR = FORTIO_ENOTFOUND
+    integer, parameter, public :: NF90_ENOTSUPPORT = FORTIO_ENOTSUP
+    integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
+    integer, parameter, public :: NF90_NOWRITE = 0
+    integer, parameter, public :: NF90_WRITE = 1
+    integer, parameter, public :: NF90_BYTE = NC_BYTE
+    integer, parameter, public :: NF90_CHAR = NC_CHAR
+    integer, parameter, public :: NF90_SHORT = NC_SHORT
+    integer, parameter, public :: NF90_INT = NC_INT
+    integer, parameter, public :: NF90_FLOAT = NC_FLOAT
+    integer, parameter, public :: NF90_DOUBLE = NC_DOUBLE
+
+    integer, parameter :: MAX_OPEN_FILES = 32
+    type(classic_file_t), save :: files(MAX_OPEN_FILES)
+    logical, save :: in_use(MAX_OPEN_FILES) = .false.
+    character(len=512), save :: last_error = ""
+
+    interface nf90_get_var
+        module procedure get_i32_scalar, get_i32_rank1
+        module procedure get_r64_scalar, get_r64_rank1, get_r64_rank2, get_r64_rank3
+    end interface nf90_get_var
+
+    public :: nf90_open, nf90_close, nf90_inq_varid, nf90_get_var, nf90_strerror
+
+contains
+
+    integer function nf90_open(path, mode, ncid) result(code)
+        character(len=*), intent(in) :: path
+        integer, intent(in) :: mode
+        integer, intent(out) :: ncid
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        ncid = -1
+        if (mode /= NF90_NOWRITE) then
+            code = NF90_ENOTSUPPORT
+            last_error = "classic compatibility writer is not implemented"
+            return
+        end if
+        slot = first_free_slot()
+        if (slot == 0) then
+            code = NF90_EBADID
+            last_error = "fortio open-file table is full"
+            return
+        end if
+        call files(slot)%open(path, status)
+        code = status%code
+        if (.not. status%ok()) then
+            last_error = status%message
+            return
+        end if
+        in_use(slot) = .true.
+        ncid = slot
+    end function nf90_open
+
+    integer function nf90_close(ncid) result(code)
+        integer, intent(in) :: ncid
+        type(fortio_status_t) :: status
+
+        if (.not. valid_id(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call files(ncid)%close(status)
+        in_use(ncid) = .false.
+        code = status%code
+        if (.not. status%ok()) last_error = status%message
+    end function nf90_close
+
+    integer function nf90_inq_varid(ncid, name, varid) result(code)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: varid
+
+        if (.not. valid_id(ncid)) then
+            code = NF90_EBADID
+            varid = -1
+            return
+        end if
+        varid = files(ncid)%variable_id(name)
+        if (varid == 0) then
+            code = NF90_ENOTVAR
+            varid = -1
+        else
+            code = NF90_NOERR
+        end if
+    end function nf90_inq_varid
+
+    integer function get_i32_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int32), intent(out) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_i32_scalar(files(ncid)%variables(varid)%name, value, status)
+        code = finish_status(status)
+    end function get_i32_scalar
+
+    integer function get_i32_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int32), intent(out) :: value(:)
+        integer(int32), allocatable :: temporary(:)
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_i32_1(files(ncid)%variables(varid)%name, temporary, status)
+        if (status%ok()) then
+            if (size(value) == size(temporary)) then
+                value = temporary
+            else
+                call status%set(NF90_EINVAL, "destination shape does not match variable")
+            end if
+        end if
+        code = finish_status(status)
+    end function get_i32_rank1
+
+    integer function get_r64_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(out) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_r64_scalar(files(ncid)%variables(varid)%name, value, status)
+        code = finish_status(status)
+    end function get_r64_scalar
+
+    integer function get_r64_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(out) :: value(:)
+        real(real64), allocatable :: temporary(:)
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
+        if (status%ok()) then
+            if (all(shape(value) == shape(temporary))) then
+                value = temporary
+            else
+                call status%set(NF90_EINVAL, "destination shape does not match variable")
+            end if
+        end if
+        code = finish_status(status)
+    end function get_r64_rank1
+
+    integer function get_r64_rank2(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(out) :: value(:, :)
+        real(real64), allocatable :: temporary(:, :)
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
+        if (status%ok()) then
+            if (all(shape(value) == shape(temporary))) then
+                value = temporary
+            else
+                call status%set(NF90_EINVAL, "destination shape does not match variable")
+            end if
+        end if
+        code = finish_status(status)
+    end function get_r64_rank2
+
+    integer function get_r64_rank3(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(out) :: value(:, :, :)
+        real(real64), allocatable :: temporary(:, :, :)
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
+        if (status%ok()) then
+            if (all(shape(value) == shape(temporary))) then
+                value = temporary
+            else
+                call status%set(NF90_EINVAL, "destination shape does not match variable")
+            end if
+        end if
+        code = finish_status(status)
+    end function get_r64_rank3
+
+    function nf90_strerror(code) result(message)
+        integer, intent(in) :: code
+        character(len=512) :: message
+
+        select case (code)
+        case (NF90_NOERR)
+            message = "No error"
+        case (NF90_EBADID)
+            message = "Invalid file ID"
+        case (NF90_ENOTVAR)
+            message = "Variable not found"
+        case (NF90_ENOTSUPPORT)
+            message = "Operation or format feature is not supported"
+        case default
+            if (len_trim(last_error) > 0) then
+                message = trim(last_error)
+            else
+                write(message, '("fortio error ", I0)') code
+            end if
+        end select
+    end function nf90_strerror
+
+    integer function first_free_slot()
+        integer :: i
+
+        first_free_slot = 0
+        do i = 1, MAX_OPEN_FILES
+            if (.not. in_use(i)) then
+                first_free_slot = i
+                return
+            end if
+        end do
+    end function first_free_slot
+
+    logical function valid_id(ncid)
+        integer, intent(in) :: ncid
+
+        valid_id = ncid >= 1
+        if (valid_id) valid_id = ncid <= MAX_OPEN_FILES
+        if (valid_id) valid_id = in_use(ncid)
+    end function valid_id
+
+    logical function prepare_get(ncid, varid, status)
+        integer, intent(in) :: ncid, varid
+        type(fortio_status_t), intent(out) :: status
+
+        call status%clear()
+        prepare_get = valid_id(ncid)
+        if (.not. prepare_get) then
+            call status%set(NF90_EBADID, "invalid file ID")
+            return
+        end if
+        prepare_get = varid >= 1
+        if (prepare_get) prepare_get = varid <= size(files(ncid)%variables)
+        if (.not. prepare_get) call status%set(NF90_ENOTVAR, "invalid variable ID")
+    end function prepare_get
+
+    integer function finish_status(status)
+        type(fortio_status_t), intent(in) :: status
+
+        finish_status = status%code
+        if (.not. status%ok()) last_error = status%message
+    end function finish_status
+
+end module netcdf
