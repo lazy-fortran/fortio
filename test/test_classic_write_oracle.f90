@@ -7,11 +7,12 @@ program test_classic_write_oracle
     implicit none
 
     integer :: ncid, x_dim, y_dim, string_dim, group_dim
-    integer :: scalar_var, x_var, matrix_var, group_var, mode_var, status
+    integer :: scalar_var, x_var, matrix_var, rank4_var, group_var, mode_var, status
     character(len=1024) :: path, command, line
     real(real64) :: x(3), matrix(3, 2)
+    real(real64) :: rank4(2, 2, 2, 2)
     integer :: unit, io_status, command_status
-    logical :: found_global, found_units, found_bounds, found_groups, found_mode
+    logical :: found_global, found_units, found_bounds, found_groups, found_mode, found_rank4
     character(len=5) :: groups(2)
 
     call get_command_argument(1, path)
@@ -33,6 +34,9 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "define x values"
     status = nf90_def_var(ncid, "matrix", NF90_DOUBLE, [x_dim, y_dim], matrix_var)
     if (status /= NF90_NOERR) error stop "define matrix"
+    status = nf90_def_var(ncid, "rank4", NF90_DOUBLE, [y_dim, y_dim, y_dim, y_dim], &
+                          rank4_var)
+    if (status /= NF90_NOERR) error stop "define rank4"
     status = nf90_def_var(ncid, "coil_group", NF90_CHAR, [string_dim, group_dim], group_var)
     if (status /= NF90_NOERR) error stop "define character array"
     status = nf90_def_var(ncid, "mgrid_mode", NF90_CHAR, [group_dim], mode_var)
@@ -54,6 +58,9 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "put x"
     status = nf90_put_var(ncid, matrix_var, matrix)
     if (status /= NF90_NOERR) error stop "put matrix"
+    rank4 = reshape([(real(status, real64), status=1, size(rank4))], shape(rank4))
+    status = nf90_put_var(ncid, rank4_var, rank4)
+    if (status /= NF90_NOERR) error stop "put rank4"
     groups = ["alpha", "beta "]
     status = nf90_inq_varid(ncid, "coil_group", group_var)
     if (status /= NF90_NOERR) error stop "inquire writer character array"
@@ -68,7 +75,8 @@ program test_classic_write_oracle
     status = nf90_create(trim(path), ior(NF90_NOCLOBBER, NF90_NETCDF4), ncid)
     if (status /= NF90_EEXIST) error stop "noclobber did not preserve existing file"
 
-    command = "ncdump -v coil_group,mgrid_mode "//trim(path)//" > "//trim(path)//".header"
+    command = "ncdump -v coil_group,mgrid_mode,rank4 "//trim(path)//" > "// &
+              trim(path)//".header"
     call execute_command_line(trim(command), exitstat=command_status)
     if (command_status /= 0) error stop "ncdump rejected fortio attribute encoding"
     open(newunit=unit, file=trim(path)//".header", status="old", action="read")
@@ -77,6 +85,7 @@ program test_classic_write_oracle
     found_bounds = .false.
     found_groups = .false.
     found_mode = .false.
+    found_rank4 = .false.
     do
         read(unit, '(A)', iostat=io_status) line
         if (io_status /= 0) exit
@@ -85,6 +94,7 @@ program test_classic_write_oracle
         if (index(line, 'matrix:lbound = 1, -2') > 0) found_bounds = .true.
         if (index(line, '"alpha",') > 0) found_groups = .true.
         if (index(line, 'mgrid_mode = "RS"') > 0) found_mode = .true.
+        if (index(line, 'rank4 =') > 0) found_rank4 = .true.
     end do
     close(unit)
     if (.not. found_global) error stop "ncdump global attribute differs"
@@ -92,4 +102,5 @@ program test_classic_write_oracle
     if (.not. found_bounds) error stop "ncdump integer attribute differs"
     if (.not. found_groups) error stop "ncdump character array differs"
     if (.not. found_mode) error stop "ncdump character vector differs"
+    if (.not. found_rank4) error stop "ncdump rank-4 variable differs"
 end program test_classic_write_oracle

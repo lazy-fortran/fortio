@@ -57,6 +57,7 @@ module netcdf
         module procedure put_char_scalar, put_char_rank1
         module procedure put_i32_scalar, put_i32_rank1
         module procedure put_r64_scalar, put_r64_rank1, put_r64_rank2, put_r64_rank3
+        module procedure put_r64_rank4
     end interface nf90_put_var
 
     interface nf90_get_att
@@ -807,6 +808,19 @@ contains
         call writers(ncid)%put_r64_3(varid, value, status)
         code = finish_status(status)
     end function put_r64_rank3
+
+    integer function put_r64_rank4(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(in) :: value(:, :, :, :)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_r64_4(varid, value, status)
+        code = finish_status(status)
+    end function put_r64_rank4
 
     function nf90_strerror(code) result(message)
         integer, intent(in) :: code
