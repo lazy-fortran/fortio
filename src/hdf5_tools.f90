@@ -35,6 +35,7 @@ module hdf5_tools
     integer, save :: handle_mode(MAX_OPEN_FILES) = 0
     integer, save :: root_slot(MAX_OPEN_FILES) = 0
     logical, save :: root_handle(MAX_OPEN_FILES) = .false.
+    logical, save :: read_shadow_open(MAX_OPEN_FILES) = .false.
     integer(c_int), save :: write_lock_token(MAX_OPEN_FILES) = -1_c_int
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
     type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
@@ -109,7 +110,7 @@ contains
         integer :: element_size, slot
 
         hdferr = -1
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%describe(joined_path(slot, dataset), is_group, &
             type_class, file_dimensions, status, element_size)
         if (.not. status%ok()) return
@@ -204,8 +205,7 @@ contains
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
         call copy_object(slot, "", slot, "")
-        call files(slot)%close(status)
-        call require_ok(status)
+        read_shadow_open(slot) = .true.
         h5id = int(slot, HID_T)
     end subroutine h5_open_rw
 
@@ -620,7 +620,7 @@ contains
         integer(int32) :: temporary
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         value = int(temporary, kind(value))
@@ -634,7 +634,7 @@ contains
         integer(int32), allocatable :: temporary(:)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -649,7 +649,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -664,7 +664,7 @@ contains
         integer(int32), allocatable :: temporary(:, :)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -679,7 +679,7 @@ contains
         integer(int32), allocatable :: temporary(:, :, :)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -693,7 +693,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), value, status)
         call require_ok(status)
     end subroutine h5_get_double_0
@@ -706,7 +706,7 @@ contains
         real(real64), allocatable :: temporary(:)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -721,7 +721,7 @@ contains
         integer :: slot
         character(len=2048) :: path
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call joined_path_into(slot, dataset, path)
         call files(root_slot(slot))%read_into_r64_2(trim(path), value, status)
         call require_ok(status)
@@ -735,7 +735,7 @@ contains
         real(real64), allocatable :: temporary(:, :, :)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -750,7 +750,7 @@ contains
         real(real64), allocatable :: temporary(:, :, :, :)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -765,7 +765,7 @@ contains
         real(real64), allocatable :: temporary(:, :, :, :, :)
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -780,7 +780,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -795,7 +795,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -810,7 +810,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
         call require_ok(status)
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
@@ -825,7 +825,7 @@ contains
         type(fortio_status_t) :: status
         integer :: i, slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         call files(root_slot(slot))%read_text_scalar(joined_path(slot, dataset), &
             temporary, status)
         call require_ok(status)
@@ -956,7 +956,7 @@ contains
         logical :: found
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
+        slot = require_readable(h5id)
         lower = 0
         upper = 0
         call files(root_slot(slot))%read_i32_attribute(joined_path(slot, dataset), &
@@ -1435,6 +1435,19 @@ contains
         if (handle_mode(slot) /= mode) error stop "fortio HDF5 identifier has wrong mode"
     end function require_mode
 
+    integer function require_readable(h5id) result(slot)
+        integer(HID_T), intent(in) :: h5id
+        integer :: root
+
+        slot = require_id(h5id)
+        root = root_slot(slot)
+        if (handle_mode(slot) == MODE_READ) return
+        if (handle_mode(slot) == MODE_WRITE) then
+            if (read_shadow_open(root)) return
+        end if
+        error stop "fortio HDF5 identifier is not readable"
+    end function require_readable
+
     subroutine attach_unlimited_buffer(slot)
         integer, intent(in) :: slot
         integer :: candidate, root
@@ -1466,6 +1479,7 @@ contains
         handle_mode(slot) = mode
         root_slot(slot) = slot
         root_handle(slot) = .true.
+        read_shadow_open(slot) = .false.
         handle_prefix(slot) = ""
         call handle_table_unlock()
     end subroutine set_root_handle
@@ -1501,6 +1515,11 @@ contains
             call files(slot)%close(status)
         else if (handle_mode(slot) == MODE_WRITE) then
             call flush_unlimited_buffers(slot)
+            if (read_shadow_open(slot)) then
+                call files(slot)%close(status)
+                call require_ok(status)
+                read_shadow_open(slot) = .false.
+            end if
             call writers(slot)%close(status)
         else
             error stop "invalid fortio HDF5 handle mode"
@@ -1579,6 +1598,7 @@ contains
         handle_mode(slot) = 0
         root_slot(slot) = 0
         root_handle(slot) = .false.
+        read_shadow_open(slot) = .false.
         write_lock_token(slot) = -1_c_int
         handle_prefix(slot) = ""
         unlimited_buffers(slot)%file_path = ""

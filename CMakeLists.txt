@@ -189,7 +189,8 @@ if(FORTIO_BUILD_TESTING)
     target_link_libraries(test_hdf5_tools_read PRIVATE fortio)
     add_test(NAME hdf5_tools_read COMMAND test_hdf5_tools_read
         "${CMAKE_CURRENT_BINARY_DIR}/hdf5-tools-oracle.h5"
-        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py")
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_hdf5_open_rw.py")
 
     add_executable(test_hdf5_write_oracle test/test_hdf5_write_oracle.f90)
     target_link_libraries(test_hdf5_write_oracle PRIVATE fortio)
