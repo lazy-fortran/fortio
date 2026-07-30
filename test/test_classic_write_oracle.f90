@@ -1,13 +1,15 @@
 program test_classic_write_oracle
     use, intrinsic :: iso_fortran_env, only: int32, real64
     use netcdf, only: nf90_create, nf90_def_dim, nf90_def_var, nf90_enddef, &
-                      nf90_put_var, nf90_close, NF90_CLOBBER, NF90_DOUBLE, &
-                      NF90_INT, NF90_NOERR
+                      nf90_put_att, nf90_put_var, nf90_close, NF90_CLOBBER, &
+                      NF90_DOUBLE, NF90_GLOBAL, NF90_INT, NF90_NOERR
     implicit none
 
     integer :: ncid, x_dim, y_dim, scalar_var, x_var, matrix_var, status
-    character(len=1024) :: path
+    character(len=1024) :: path, command, line
     real(real64) :: x(3), matrix(3, 2)
+    integer :: unit, io_status, command_status
+    logical :: found_global, found_units, found_bounds
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/fortio-written.nc"
@@ -24,6 +26,12 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "define x values"
     status = nf90_def_var(ncid, "matrix", NF90_DOUBLE, [x_dim, y_dim], matrix_var)
     if (status /= NF90_NOERR) error stop "define matrix"
+    status = nf90_put_att(ncid, NF90_GLOBAL, "coordinate_system", "cartesian")
+    if (status /= NF90_NOERR) error stop "put global text attribute"
+    status = nf90_put_att(ncid, x_var, "units", "m")
+    if (status /= NF90_NOERR) error stop "put variable text attribute"
+    status = nf90_put_att(ncid, matrix_var, "lbound", [1_int32, -2_int32])
+    if (status /= NF90_NOERR) error stop "put integer vector attribute"
     status = nf90_enddef(ncid)
     if (status /= NF90_NOERR) error stop "end definition"
 
@@ -37,4 +45,23 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "put matrix"
     status = nf90_close(ncid)
     if (status /= NF90_NOERR) error stop "close"
+
+    command = "ncdump -h "//trim(path)//" > "//trim(path)//".header"
+    call execute_command_line(trim(command), exitstat=command_status)
+    if (command_status /= 0) error stop "ncdump rejected fortio attribute encoding"
+    open(newunit=unit, file=trim(path)//".header", status="old", action="read")
+    found_global = .false.
+    found_units = .false.
+    found_bounds = .false.
+    do
+        read(unit, '(A)', iostat=io_status) line
+        if (io_status /= 0) exit
+        if (index(line, ':coordinate_system = "cartesian"') > 0) found_global = .true.
+        if (index(line, 'x_values:units = "m"') > 0) found_units = .true.
+        if (index(line, 'matrix:lbound = 1, -2') > 0) found_bounds = .true.
+    end do
+    close(unit)
+    if (.not. found_global) error stop "ncdump global attribute differs"
+    if (.not. found_units) error stop "ncdump variable attribute differs"
+    if (.not. found_bounds) error stop "ncdump integer attribute differs"
 end program test_classic_write_oracle
