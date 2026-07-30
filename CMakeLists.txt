@@ -26,6 +26,10 @@ target_include_directories(fortio PUBLIC
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(test_checksum test/test_checksum.f90)
+    target_link_libraries(test_checksum PRIVATE fortio)
+    add_test(NAME checksum COMMAND test_checksum)
+
     add_executable(test_bytes test/test_bytes.f90)
     target_link_libraries(test_bytes PRIVATE fortio)
     add_test(NAME bytes COMMAND test_bytes)
