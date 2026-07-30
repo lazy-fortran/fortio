@@ -1,7 +1,8 @@
 program test_hdf5_tools_write
     use, intrinsic :: iso_fortran_env, only: real64
     use hdf5_tools, only: HID_T, h5_add, h5_close, h5_close_group, h5_create, &
-                          h5_define_group, h5_get, h5_open, h5_open_group
+                          h5_create_parent_groups, h5_define_group, h5_get, h5_isvalid, &
+                          h5_open, h5_open_group, h5overwrite
     implicit none
 
     integer(HID_T) :: file_id, group_id
@@ -22,19 +23,31 @@ program test_hdf5_tools_write
     cube = reshape([(real(scalar, real64), scalar = 1, size(cube))], shape(cube))
 
     call h5_create(trim(path), file_id)
+    if (.not. h5_isvalid(file_id)) error stop "new HDF5 identifier is invalid"
     call h5_add(file_id, "answer", 42, "legacy comment", "1")
+    h5overwrite = .true.
+    call h5_add(file_id, "answer", 43, "replacement comment", "1")
+    h5overwrite = .false.
     call h5_add(file_id, "tolerance", 0.25_real64, accuracy=1.0e-8_real64)
     call h5_add(file_id, "label", "stellarator", "configuration label")
+    call h5_add(file_id, "enabled", .true.)
+    call h5_create_parent_groups(file_id, "prepared/nested/")
+    call h5_add(file_id, "prepared/nested/value", 9)
     call h5_add(file_id, "absent", absent, default=7)
     call h5_define_group(file_id, "results", group_id)
     call h5_add(group_id, "matrix", matrix, [1, 1], [2, 3])
     call h5_add(group_id, "cube", cube, [1, 1, 1, 1, 1], [2, 2, 2, 2, 2])
     call h5_close_group(group_id)
     call h5_close(file_id)
+    if (h5_isvalid(file_id)) error stop "closed HDF5 identifier remains valid"
 
     call h5_open(trim(path), file_id)
     call h5_get(file_id, "answer", scalar)
-    if (scalar /= 42) error stop "hdf5_tools scalar round trip differs"
+    if (scalar /= 43) error stop "hdf5_tools overwrite differs"
+    call h5_get(file_id, "enabled", found_group)
+    if (.not. found_group) error stop "hdf5_tools logical round trip differs"
+    call h5_get(file_id, "prepared/nested/value", scalar)
+    if (scalar /= 9) error stop "prepared parent-group value differs"
     call h5_get(file_id, "absent", scalar)
     if (scalar /= 7) error stop "hdf5_tools unallocated default differs"
     call h5_get(file_id, "label", label)
@@ -67,7 +80,7 @@ program test_hdf5_tools_write
         if (index(line, 'DATASPACE  SIMPLE { ( 3, 2 )') > 0) found_matrix_shape = .true.
         if (index(line, 'DATASPACE  SIMPLE { ( 2, 2, 2, 2, 2 )') > 0) found_cube = .true.
         if (index(line, 'ATTRIBUTE "comment"') > 0) found_comment = .true.
-        if (index(line, '"legacy comment"') > 0) found_comment_value = .true.
+        if (index(line, '"replacement comment"') > 0) found_comment_value = .true.
         if (index(line, 'ATTRIBUTE "lbounds"') > 0) found_bounds = .true.
         if (index(line, 'ATTRIBUTE "accuracy"') > 0) found_accuracy = .true.
         if (index(line, '(0): 1e-08') > 0) found_accuracy_value = .true.

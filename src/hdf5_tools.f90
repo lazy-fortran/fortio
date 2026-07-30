@@ -15,6 +15,7 @@ module hdf5_tools
     integer, save :: root_slot(MAX_OPEN_FILES) = 0
     logical, save :: root_handle(MAX_OPEN_FILES) = .false.
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
+    logical, save, public :: h5overwrite = .false.
 
     interface h5_get
         module procedure h5_get_int
@@ -25,6 +26,7 @@ module hdf5_tools
         module procedure h5_get_double_2
         module procedure h5_get_double_3, h5_get_double_4, h5_get_double_5
         module procedure h5_get_string
+        module procedure h5_get_logical
     end interface h5_get
 
     interface h5_add
@@ -51,6 +53,7 @@ module hdf5_tools
     public :: h5_add
     public :: h5_get_bounds
     public :: h5_exists, h5_obj_exists
+    public :: h5_isvalid, h5_create_parent_groups
 
 contains
 
@@ -321,6 +324,16 @@ contains
         end do
     end subroutine h5_get_string
 
+    subroutine h5_get_logical(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        logical, intent(out) :: value
+        integer :: temporary
+
+        call h5_get_int(h5id, dataset, temporary)
+        value = temporary /= 0
+    end subroutine h5_get_logical
+
     logical function h5_exists(h5id, name_obj) result(exists)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: name_obj
@@ -339,6 +352,42 @@ contains
 
         exists = h5_exists(h5id, name_obj)
     end subroutine h5_obj_exists
+
+    logical function h5_isvalid(h5id) result(valid)
+        integer(HID_T), intent(in) :: h5id
+        integer :: slot
+
+        valid = .false.
+        if (h5id < 1_HID_T) return
+        if (h5id > int(MAX_OPEN_FILES, HID_T)) return
+        slot = int(h5id)
+        valid = in_use(slot)
+    end function h5_isvalid
+
+    subroutine h5_create_parent_groups(h5id, dataset)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        type(fortio_status_t) :: status
+        character(len=:), allocatable :: path
+        integer :: separator, slot
+
+        slot = require_mode(h5id, MODE_WRITE)
+        path = trim(dataset)
+        do while (len(path) > 0)
+            if (path(len(path):len(path)) /= "/") exit
+            path = path(:len(path) - 1)
+        end do
+        if (len(path) == 0) return
+        if (len_trim(dataset) > 0) then
+            if (dataset(len_trim(dataset):len_trim(dataset)) /= "/") then
+                separator = scan(path, "/", back=.true.)
+                if (separator <= 1) return
+                path = path(:separator - 1)
+            end if
+        end if
+        call writers(root_slot(slot))%define_group(joined_path(slot, path), status)
+        call require_ok(status)
+    end subroutine h5_create_parent_groups
 
     subroutine h5_get_bounds_1(h5id, dataset, lb1, ub1)
         integer(HID_T), intent(in) :: h5id
@@ -416,6 +465,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_i32_scalar(joined_path(slot, dataset), &
                                                      int(value, int32), status)
         call require_ok(status)
@@ -439,6 +489,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_text_scalar(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_common_attributes(slot, dataset, comment, unit)
@@ -488,6 +539,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         converted = int(value, int32)
         call writers(root_slot(slot))%add_i32_1(joined_path(slot, dataset), converted, status)
         call require_ok(status)
@@ -537,6 +589,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         converted = int(value, int32)
         call writers(root_slot(slot))%add_i32_2(joined_path(slot, dataset), converted, status)
         call require_ok(status)
@@ -553,6 +606,7 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         converted = int(value, int32)
         call writers(root_slot(slot))%add_i32_3(joined_path(slot, dataset), converted, status)
         call require_ok(status)
@@ -570,6 +624,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_scalar(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_common_attributes(slot, dataset, comment, unit)
@@ -625,6 +680,7 @@ contains
         integer :: slot
 
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_1(joined_path(slot, dataset), value, status)
         call require_ok(status)
     end subroutine add_double_1
@@ -641,6 +697,7 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_2(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_bounds_attributes(slot, dataset, lbounds, ubounds)
@@ -660,6 +717,7 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_3(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_bounds_attributes(slot, dataset, lbounds, ubounds)
@@ -679,6 +737,7 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_4(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_bounds_attributes(slot, dataset, lbounds, ubounds)
@@ -698,6 +757,7 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_r64_5(joined_path(slot, dataset), value, status)
         call require_ok(status)
         call add_bounds_attributes(slot, dataset, lbounds, ubounds)
@@ -824,6 +884,16 @@ contains
         if (size(ubounds) /= size(actual_shape)) error stop "HDF5 upper-bound rank mismatch"
         if (any(ubounds - lbounds + 1 /= actual_shape)) error stop "HDF5 bounds shape mismatch"
     end subroutine require_bounds
+
+    subroutine prepare_overwrite(slot, dataset)
+        integer, intent(in) :: slot
+        character(len=*), intent(in) :: dataset
+        type(fortio_status_t) :: status
+
+        if (.not. h5overwrite) return
+        call writers(root_slot(slot))%remove_dataset(joined_path(slot, dataset), status)
+        call require_ok(status)
+    end subroutine prepare_overwrite
 
     subroutine add_common_attributes(slot, dataset, comment, unit)
         integer, intent(in) :: slot
