@@ -1,7 +1,8 @@
 # Compatibility contract
 
-Fortio supports only behavior required by pinned NEO-2, libneo, KAMEL, and
-SIMPLE revisions. Unsupported format features return an explicit error.
+Fortio supports only behavior required by pinned NEO-2, NEO-RT, libneo, KAMEL,
+SIMPLE, MEPHIT, and Rabe revisions. Unsupported format features return an
+explicit error.
 
 ## NetCDF
 
