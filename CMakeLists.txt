@@ -3,6 +3,7 @@ project(fortio VERSION 0.1.0 LANGUAGES C Fortran)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+find_package(ZLIB REQUIRED)
 option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OFF)
 option(FORTIO_INSTALL "Install fortio targets and package files" ${PROJECT_IS_TOP_LEVEL})
 
@@ -11,6 +12,8 @@ add_library(fortio
     src/fortio_posix.f90
     src/fortio_status.f90
     src/fortio_checksum.f90
+    src/fortio_deflate.c
+    src/fortio_deflate.f90
     src/fortio_bytes.f90
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
@@ -21,6 +24,7 @@ add_library(fortio
     src/hdf5_tools_f2003.f90
     src/netcdf.f90
 )
+target_link_libraries(fortio PUBLIC ZLIB::ZLIB)
 add_library(fortio::fortio ALIAS fortio)
 target_link_libraries(fortio PUBLIC pthread)
 set_target_properties(fortio PROPERTIES
@@ -37,6 +41,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
 endif()
 
 if(FORTIO_BUILD_BENCHMARKS)
+    find_package(OpenMP REQUIRED COMPONENTS Fortran)
     find_program(NF_CONFIG nf-config REQUIRED)
     execute_process(COMMAND "${NF_CONFIG}" --includedir
         OUTPUT_VARIABLE NETCDFF_INCLUDE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -52,6 +57,22 @@ if(FORTIO_BUILD_BENCHMARKS)
     add_executable(benchmark_native_netcdf benchmark/netcdf_roundtrip.f90)
     target_include_directories(benchmark_native_netcdf PRIVATE "${NETCDFF_INCLUDE_DIR}")
     target_link_libraries(benchmark_native_netcdf PRIVATE ${NETCDFF_LINK_FLAGS})
+
+    add_executable(benchmark_fortio_netcdf4_deflate
+        benchmark/netcdf4_deflate_roundtrip.f90)
+    target_link_libraries(benchmark_fortio_netcdf4_deflate PRIVATE fortio)
+
+    add_executable(benchmark_native_netcdf4_deflate
+        benchmark/netcdf4_deflate_roundtrip.f90)
+    target_include_directories(benchmark_native_netcdf4_deflate
+        PRIVATE "${NETCDFF_INCLUDE_DIR}")
+    target_link_libraries(benchmark_native_netcdf4_deflate
+        PRIVATE ${NETCDFF_LINK_FLAGS})
+
+    add_executable(benchmark_fortio_netcdf4_threaded
+        benchmark/netcdf4_threaded.f90)
+    target_link_libraries(benchmark_fortio_netcdf4_threaded
+        PRIVATE fortio OpenMP::OpenMP_Fortran)
 
     find_package(HDF5 COMPONENTS Fortran REQUIRED)
     add_executable(benchmark_fortio_hdf5 benchmark/hdf5_roundtrip_fortio.f90)
@@ -139,6 +160,17 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.nc")
     set_tests_properties(classic_write_oracle PROPERTIES DEPENDS classic_write)
 
+    add_executable(test_netcdf_rabe_compat test/test_netcdf_rabe_compat.f90)
+    target_link_libraries(test_netcdf_rabe_compat PRIVATE fortio)
+    add_test(NAME netcdf_rabe_compat COMMAND test_netcdf_rabe_compat
+        "${CMAKE_CURRENT_BINARY_DIR}/rabe-compat.nc")
+    add_test(NAME netcdf_rabe_compat_oracle
+        COMMAND ncdump "${CMAKE_CURRENT_BINARY_DIR}/rabe-compat.nc")
+    set_tests_properties(netcdf_rabe_compat_oracle PROPERTIES
+        DEPENDS netcdf_rabe_compat
+        PASS_REGULAR_EXPRESSION
+        "title = \"RABE Bootstrap Current Analysis Results\"")
+
     add_executable(test_hdf5_read test/test_hdf5_read.f90)
     target_link_libraries(test_hdf5_read PRIVATE fortio)
     add_test(NAME hdf5_read COMMAND test_hdf5_read
@@ -155,6 +187,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_hdf5_write_oracle PRIVATE fortio)
     add_test(NAME hdf5_write_oracle COMMAND test_hdf5_write_oracle
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.h5")
+
+    add_executable(test_hdf5_deflate test/test_hdf5_deflate.f90)
+    target_link_libraries(test_hdf5_deflate PRIVATE fortio)
+    add_test(NAME hdf5_deflate COMMAND test_hdf5_deflate
+        "${CMAKE_CURRENT_BINARY_DIR}/hdf5-deflate.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_hdf5_deflate.py")
+
+    add_executable(test_netcdf4_deflate test/test_netcdf4_deflate.f90)
+    target_link_libraries(test_netcdf4_deflate PRIVATE fortio)
+    add_test(NAME netcdf4_deflate COMMAND test_netcdf4_deflate
+        "${CMAKE_CURRENT_BINARY_DIR}/netcdf4-deflate.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_netcdf4_deflate.py")
 
     add_executable(test_hdf5_tools_write test/test_hdf5_tools_write.f90)
     target_link_libraries(test_hdf5_tools_write PRIVATE fortio)
@@ -174,6 +218,14 @@ if(BUILD_TESTING)
     add_test(NAME concurrent_hdf5_writes COMMAND test_concurrent_hdf5_writes
         "${CMAKE_CURRENT_BINARY_DIR}/concurrent-writes.h5"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_thread_writes.py")
+
+    add_executable(test_concurrent_netcdf4_writes
+        test/test_concurrent_netcdf4_writes.f90)
+    target_link_libraries(test_concurrent_netcdf4_writes
+        PRIVATE fortio OpenMP::OpenMP_Fortran)
+    add_test(NAME concurrent_netcdf4_writes COMMAND test_concurrent_netcdf4_writes
+        "${CMAKE_CURRENT_BINARY_DIR}/concurrent-netcdf4"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_netcdf4_deflate.py")
 endif()
 
 if(FORTIO_INSTALL)

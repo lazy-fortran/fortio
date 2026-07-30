@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -58,6 +60,15 @@ jobs:
           python3 benchmark/compare.py \
             build-benchmark/benchmark_fortio_netcdf \
             build-benchmark/benchmark_native_netcdf --enforce
+      - name: Enforce SIMPLE compressed NetCDF-4 performance
+        run: |
+          python3 benchmark/compare.py \
+            build-benchmark/benchmark_fortio_netcdf4_deflate \
+            build-benchmark/benchmark_native_netcdf4_deflate --enforce
+      - name: Enforce thread-safe compressed throughput
+        run: |
+          python3 benchmark/compare_threaded.py \
+            build-benchmark/benchmark_fortio_netcdf4_threaded --enforce
       - name: Enforce HDF5 performance
         run: |
           python3 benchmark/compare.py \
@@ -88,7 +99,8 @@ jobs:
       - name: Test concurrent OpenMP I/O
         run: >
           OMP_NUM_THREADS=8 ctest --test-dir build-tsan
-          -R "^(thread_safety|concurrent_hdf5_writes)$" --output-on-failure
+          -R "^(thread_safety|concurrent_hdf5_writes|concurrent_netcdf4_writes)$"
+          --output-on-failure
 
   windows:
     runs-on: windows-latest
@@ -103,6 +115,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-zlib
       - name: Configure
         shell: msys2 {0}
         run: cmake -S . -B build -G Ninja -DBUILD_TESTING=ON

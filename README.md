@@ -1,10 +1,14 @@
 # fortio
 
-Dependency-free scientific file I/O for modern Fortran.
+Small scientific file I/O for modern Fortran without NetCDF or HDF5 libraries.
 
 Fortio is an MIT-licensed implementation of the NetCDF and HDF5 file-format
-subset used by NEO-2, libneo, and KAMEL. System NetCDF and HDF5 installations
-are test oracles, not production dependencies.
+subset used by NEO-2, libneo, KAMEL, and SIMPLE. System NetCDF and HDF5
+installations are test oracles, not production dependencies.
+
+The only format-code dependency is zlib, used for the shuffle/deflate
+compression enabled by SIMPLE orbit output. Both fpm and the installed CMake
+package link it transitively.
 
 The current implementation includes the native typed file API,
 byte-order-safe binary primitives, CDF-1/CDF-2 and NetCDF-4 access, and the
@@ -82,13 +86,21 @@ python benchmark/compare.py \
   build-benchmark/benchmark_fortio_netcdf \
   build-benchmark/benchmark_native_netcdf --enforce
 python benchmark/compare.py \
+  build-benchmark/benchmark_fortio_netcdf4_deflate \
+  build-benchmark/benchmark_native_netcdf4_deflate --enforce
+python benchmark/compare.py \
   build-benchmark/benchmark_fortio_hdf5 \
   build-benchmark/benchmark_native_hdf5 --enforce
 python benchmark/compare.py \
   build-benchmark/benchmark_fortio_hdf5_append \
   build-benchmark/benchmark_native_hdf5_append --enforce
+python benchmark/compare_threaded.py \
+  build-benchmark/benchmark_fortio_netcdf4_threaded --enforce
 ```
 
-The third comparison reproduces KAMEL's six-field unlimited time-step matrix
-with a close/reopen cycle per append. All comparisons use medians and verify
-identical result checksums.
+The compressed comparison reproduces SIMPLE's particle-row orbit writes with
+shuffle and deflate level 4. The append comparison reproduces KAMEL's
+six-field unlimited time-step matrix with a close/reopen cycle per append.
+The threaded gate compares independent compressed writes using one and two
+OpenMP threads, and fails if synchronization removes the throughput benefit.
+All comparisons use alternating-order medians and verify stable checksums.

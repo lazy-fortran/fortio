@@ -3,7 +3,8 @@ module fortio_bytes
         c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_posix, only: mapped_close, mapped_copy, mapped_copy_swap64, mapped_open, &
-        posix_close, posix_create_write, posix_open_read, posix_pwrite, posix_pwrite_swap64
+        posix_close, posix_create_write, posix_open_read, posix_pwrite, &
+        posix_pwrite_swap64, posix_truncate
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -40,6 +41,7 @@ module fortio_bytes
     contains
         procedure :: open => writer_open
         procedure :: close => writer_close
+        procedure :: reset => writer_reset
         procedure :: seek => writer_seek
         procedure :: write_i8 => writer_write_i8
         procedure :: write_be_i16 => writer_write_be_i16
@@ -85,6 +87,24 @@ contains
         this%descriptor = -1_c_int
         this%position = 1_int64
     end subroutine writer_close
+
+    subroutine writer_reset(this, status)
+        class(byte_writer_t), intent(inout) :: this
+        type(fortio_status_t), intent(inout) :: status
+        integer(c_int) :: io_status
+
+        call status%clear()
+        if (this%descriptor < 0_c_int) then
+            call status%set(FORTIO_EIO, "cannot reset a closed file")
+            return
+        end if
+        io_status = posix_truncate(this%descriptor, 0_c_int64_t)
+        if (io_status /= 0_c_int) then
+            call status%set(FORTIO_EIO, "file truncate failed")
+            return
+        end if
+        this%position = 1_int64
+    end subroutine writer_reset
 
     subroutine writer_seek(this, position)
         class(byte_writer_t), intent(inout) :: this

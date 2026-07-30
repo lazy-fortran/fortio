@@ -4,6 +4,7 @@ module fortio_posix
     private
 
     public :: posix_open_read, posix_open_write, posix_create_write, posix_close
+    public :: posix_truncate
     public :: posix_path_exists, posix_pread, posix_pwrite, posix_pwrite_swap64
     public :: mapped_open, mapped_copy, mapped_copy_swap64, mapped_close
     public :: handle_table_lock, handle_table_unlock
@@ -41,6 +42,14 @@ module fortio_posix
             integer(c_int), value :: descriptor
             integer(c_int) :: code
         end function posix_close
+
+        function posix_truncate(descriptor, length) &
+                bind(C, name="fortio_posix_truncate") result(code)
+            import :: c_int, c_int64_t
+            integer(c_int), value :: descriptor
+            integer(c_int64_t), value :: length
+            integer(c_int) :: code
+        end function posix_truncate
 
         function posix_pread(descriptor, buffer, count, offset) &
                 bind(C, name="fortio_posix_pread") result(bytes_read)

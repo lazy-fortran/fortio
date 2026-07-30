@@ -206,6 +206,17 @@ int fortio_posix_close(int descriptor)
 #endif
 }
 
+int fortio_posix_truncate(int descriptor, int64_t length)
+{
+    if (length < 0)
+        return -1;
+#ifdef _WIN32
+    return _chsize_s(descriptor, (__int64)length) == 0 ? 0 : -1;
+#else
+    return ftruncate(descriptor, (off_t)length);
+#endif
+}
+
 int64_t fortio_posix_pread(
     int descriptor, void *buffer, size_t count, int64_t offset)
 {

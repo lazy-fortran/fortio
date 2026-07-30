@@ -15,9 +15,10 @@ program test_netcdf4_read
     if (len_trim(fixture) == 0) fixture = "build/netcdf4-oracle.nc"
     call get_command_argument(2, cdl)
     if (len_trim(cdl) == 0) cdl = "test/fixtures/netcdf4-oracle.cdl"
-    command = "ncgen -k netCDF-4 -o "//trim(fixture)//" "//trim(cdl)
+    command = "ncgen -k netCDF-4 -o "//trim(fixture)//".raw "//trim(cdl)// &
+        " && nccopy -k netCDF-4 -d 4 -s "//trim(fixture)//".raw "//trim(fixture)
     call execute_command_line(trim(command), exitstat=command_status)
-    if (command_status /= 0) error stop "system ncgen NetCDF-4 generation failed"
+    if (command_status /= 0) error stop "system compressed NetCDF-4 generation failed"
 
     if (nf90_open(trim(fixture), NF90_NOWRITE, ncid) /= NF90_NOERR) &
         error stop "NetCDF-4 oracle open failed"

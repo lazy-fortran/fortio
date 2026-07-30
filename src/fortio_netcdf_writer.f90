@@ -1,6 +1,7 @@
 module fortio_netcdf_writer
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use fortio_bytes, only: byte_writer_t
+    use fortio_hdf5_writer, only: hdf5_writer_t
     use fortio_netcdf_classic, only: NC_BYTE, NC_CHAR, NC_INT, NC_DOUBLE
     use fortio_status, only: fortio_status_t, FORTIO_ESTATE, FORTIO_ETYPE, &
         FORTIO_ESHAPE, FORTIO_ENOTFOUND
@@ -34,6 +35,9 @@ module fortio_netcdf_writer
         real(real64), allocatable :: values_r64(:)
         character(len=:), allocatable :: value_chars
         type(writer_attribute_t), allocatable :: attributes(:)
+        logical :: shuffle = .false.
+        logical :: deflate = .false.
+        integer :: deflate_level = 0
         integer(int64) :: begin_offset = 0_int64
         integer(int64) :: value_size = 0_int64
     end type writer_variable_t
@@ -50,6 +54,7 @@ module fortio_netcdf_writer
         procedure :: define_dimension => classic_writer_define_dimension
         procedure :: define_variable => classic_writer_define_variable
         procedure :: end_definition => classic_writer_end_definition
+        procedure :: set_deflate => classic_writer_set_deflate
         procedure :: put_attribute_text => classic_writer_put_attribute_text
         procedure :: put_attribute_i32 => classic_writer_put_attribute_i32
         procedure :: put_attribute_r64 => classic_writer_put_attribute_r64
@@ -66,6 +71,7 @@ module fortio_netcdf_writer
         procedure :: put_r64_3 => classic_writer_put_r64_3
         procedure :: put_r64_4 => classic_writer_put_r64_4
         procedure :: close => classic_writer_close
+        procedure :: close_netcdf4 => classic_writer_close_netcdf4
     end type classic_writer_t
 
 contains
@@ -183,6 +189,26 @@ contains
         end if
         this%defining = .false.
     end subroutine classic_writer_end_definition
+
+    subroutine classic_writer_set_deflate(this, id, shuffle, deflate, level, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id, level
+        logical, intent(in) :: shuffle, deflate
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (.not. this%opened) then
+            call status%set(FORTIO_ESTATE, "invalid variable for deflate")
+            return
+        end if
+        if (id < 0 .or. id >= size(this%variables)) then
+            call status%set(FORTIO_ESTATE, "invalid variable for deflate")
+            return
+        end if
+        this%variables(id + 1)%shuffle = shuffle
+        this%variables(id + 1)%deflate = deflate
+        this%variables(id + 1)%deflate_level = level
+    end subroutine classic_writer_set_deflate
 
     subroutine classic_writer_put_attribute_text(this, id, name, value, status)
         class(classic_writer_t), intent(inout) :: this
@@ -357,6 +383,15 @@ contains
             call status%set(FORTIO_ESHAPE, "hyperslab count does not match value size")
             return
         end if
+        if (size(variable_shape) == 2) then
+            if (count(1) == 1) then
+                output_index = start(1) + (start(2) - 1)*variable_shape(1)
+                this%variables(id + 1)%values_r64( &
+                    output_index:output_index + (count(2) - 1)*variable_shape(1): &
+                    variable_shape(1)) = values
+                return
+            end if
+        end if
         do linear = 1, size(values)
             remaining = linear - 1
             output_index = 1
@@ -433,6 +468,155 @@ contains
         call writer%close(status)
         this%opened = .false.
     end subroutine classic_writer_close
+
+    subroutine classic_writer_close_netcdf4(this, status)
+        class(classic_writer_t), intent(inout) :: this
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_writer_t) :: writer
+        logical, allocatable :: coordinate_variables(:)
+        integer(int32), allocatable :: coordinate_values(:)
+        character(len=256), allocatable :: scale_names(:)
+        integer :: i, j, rank
+
+        call status%clear()
+        if (.not. this%opened) return
+        call writer%create(this%path, status)
+        if (.not. status%ok()) return
+        allocate(coordinate_variables(size(this%dimensions)), source=.false.)
+        do i = 1, size(this%dimensions)
+            do j = 1, size(this%variables)
+                if (this%variables(j)%name /= this%dimensions(i)%name) cycle
+                if (size(this%variables(j)%dimension_ids) /= 1) cycle
+                if (this%variables(j)%dimension_ids(1) /= i - 1) cycle
+                coordinate_variables(i) = .true.
+                exit
+            end do
+            if (coordinate_variables(i)) cycle
+            coordinate_values = [(int(j - 1, int32), &
+                j=1, int(this%dimensions(i)%length))]
+            call writer%add_i32_1(this%dimensions(i)%name, coordinate_values, status)
+            if (.not. status%ok()) return
+            call writer%mark_dimension_scale(this%dimensions(i)%name, i - 1, status, &
+                coordinate_variable=.false.)
+            if (.not. status%ok()) return
+        end do
+        do i = 1, size(this%variables)
+            call add_netcdf4_variable(writer, this%variables(i), this%dimensions, status)
+            if (.not. status%ok()) return
+            call copy_netcdf4_attributes(writer, this%variables(i)%name, &
+                this%variables(i)%attributes, status)
+            if (.not. status%ok()) return
+        end do
+        do i = 1, size(this%dimensions)
+            if (.not. coordinate_variables(i)) cycle
+            call writer%mark_dimension_scale(this%dimensions(i)%name, i - 1, status)
+            if (.not. status%ok()) return
+        end do
+        do i = 1, size(this%variables)
+            rank = size(this%variables(i)%dimension_ids)
+            if (rank == 0) cycle
+            if (is_coordinate_variable(this%variables(i), this%dimensions)) cycle
+            allocate(scale_names(rank))
+            do j = 1, rank
+                scale_names(j) = this%dimensions( &
+                    this%variables(i)%dimension_ids(rank - j + 1) + 1)%name
+            end do
+            call writer%set_dimension_list(this%variables(i)%name, scale_names, status)
+            deallocate(scale_names)
+            if (.not. status%ok()) return
+        end do
+        call copy_netcdf4_root_attributes(writer, this%global_attributes, status)
+        if (.not. status%ok()) return
+        call writer%close(status)
+        if (status%ok()) this%opened = .false.
+    end subroutine classic_writer_close_netcdf4
+
+    subroutine add_netcdf4_variable(writer, variable, dimensions, status)
+        type(hdf5_writer_t), intent(inout) :: writer
+        type(writer_variable_t), intent(in) :: variable
+        type(writer_dimension_t), intent(in) :: dimensions(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int64), allocatable :: array_shape(:)
+        integer :: i, rank
+
+        rank = size(variable%dimension_ids)
+        allocate(array_shape(rank))
+        do i = 1, rank
+            array_shape(i) = dimensions(variable%dimension_ids(rank - i + 1) + 1)%length
+        end do
+        select case (variable%type_code)
+        case (NC_BYTE)
+            call writer%add_i8(variable%name, array_shape, variable%values_i8, status)
+        case (NC_CHAR)
+            call writer%add_char(variable%name, array_shape, variable%value_chars, status)
+        case (NC_INT)
+            call writer%add_i32_values(variable%name, array_shape, &
+                variable%values_i32, status)
+        case (NC_DOUBLE)
+            call writer%add_r64_values(variable%name, array_shape, &
+                variable%values_r64, status)
+        end select
+        if (.not. status%ok()) return
+        if (variable%deflate) then
+            call writer%set_deflate(variable%name, variable%shuffle, &
+                variable%deflate_level, status)
+        end if
+    end subroutine add_netcdf4_variable
+
+    subroutine copy_netcdf4_attributes(writer, dataset_name, attributes, status)
+        type(hdf5_writer_t), intent(inout) :: writer
+        character(len=*), intent(in) :: dataset_name
+        type(writer_attribute_t), intent(in) :: attributes(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+
+        do i = 1, size(attributes)
+            select case (attributes(i)%type_code)
+            case (NC_CHAR)
+                call writer%add_text_attribute(dataset_name, attributes(i)%name, &
+                    attributes(i)%value_text, status)
+            case (NC_INT)
+                call writer%add_i32_attribute(dataset_name, attributes(i)%name, &
+                    attributes(i)%values_i32, status)
+            case (NC_DOUBLE)
+                call writer%add_r64_attribute(dataset_name, attributes(i)%name, &
+                    attributes(i)%values_r64(1), status)
+            end select
+            if (.not. status%ok()) return
+        end do
+    end subroutine copy_netcdf4_attributes
+
+    subroutine copy_netcdf4_root_attributes(writer, attributes, status)
+        type(hdf5_writer_t), intent(inout) :: writer
+        type(writer_attribute_t), intent(in) :: attributes(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+
+        do i = 1, size(attributes)
+            select case (attributes(i)%type_code)
+            case (NC_CHAR)
+                call writer%add_root_text_attribute(attributes(i)%name, &
+                    attributes(i)%value_text, status)
+            case (NC_INT)
+                call writer%add_root_i32_attribute(attributes(i)%name, &
+                    attributes(i)%values_i32, status)
+            case (NC_DOUBLE)
+                call writer%add_root_r64_attribute(attributes(i)%name, &
+                    attributes(i)%values_r64(1), status)
+            end select
+            if (.not. status%ok()) return
+        end do
+    end subroutine copy_netcdf4_root_attributes
+
+    logical function is_coordinate_variable(variable, dimensions)
+        type(writer_variable_t), intent(in) :: variable
+        type(writer_dimension_t), intent(in) :: dimensions(:)
+
+        is_coordinate_variable = size(variable%dimension_ids) == 1
+        if (.not. is_coordinate_variable) return
+        is_coordinate_variable = variable%name == &
+            dimensions(variable%dimension_ids(1) + 1)%name
+    end function is_coordinate_variable
 
     logical function prepare_put(this, id, type_code, count, status)
         class(classic_writer_t), intent(in) :: this
