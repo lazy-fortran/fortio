@@ -53,6 +53,7 @@ module fortio_hdf5_writer
         logical :: opened = .false.
     contains
         procedure :: create => hdf5_writer_create
+        procedure :: reopen => hdf5_writer_reopen
         procedure :: define_group => hdf5_define_group
         procedure :: add_i32_scalar => hdf5_add_i32_scalar
         procedure :: add_i32_1 => hdf5_add_i32_1
@@ -96,6 +97,31 @@ contains
         this%groups(1)%object_address = ROOT_ADDRESS
         this%opened = .true.
     end subroutine hdf5_writer_create
+
+    subroutine hdf5_writer_reopen(this, path, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (this%opened) then
+            call status%set(FORTIO_ESTATE, "HDF5 writer is already open")
+            return
+        end if
+        if (.not. allocated(this%path)) then
+            call status%set(FORTIO_ESTATE, "HDF5 writer has no retained state")
+            return
+        end if
+        if (this%path /= trim(path)) then
+            call status%set(FORTIO_ESTATE, "HDF5 writer state belongs to another file")
+            return
+        end if
+        if (.not. allocated(this%groups) .or. .not. allocated(this%datasets)) then
+            call status%set(FORTIO_ESTATE, "HDF5 writer state is incomplete")
+            return
+        end if
+        this%opened = .true.
+    end subroutine hdf5_writer_reopen
 
     subroutine hdf5_add_i32_scalar(this, name, value, status)
         class(hdf5_writer_t), intent(inout) :: this

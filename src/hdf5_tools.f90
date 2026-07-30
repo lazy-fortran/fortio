@@ -157,6 +157,18 @@ contains
             return
         end if
         slot = allocate_handle()
+        if (has_persistent_buffer(trim(filename))) then
+            if (allocated(writers(slot)%path)) then
+                if (writers(slot)%path == trim(filename)) then
+                    call writers(slot)%reopen(trim(filename), status)
+                    call require_ok(status)
+                    call set_root_handle(slot, MODE_WRITE)
+                    write_lock_token(slot) = lock_token
+                    h5id = int(slot, HID_T)
+                    return
+                end if
+            end if
+        end if
         call files(slot)%open(trim(filename), status)
         call require_ok(status)
         call writers(slot)%create(trim(filename), status)
@@ -168,6 +180,22 @@ contains
         call require_ok(status)
         h5id = int(slot, HID_T)
     end subroutine h5_open_rw
+
+    logical function has_persistent_buffer(path) result(found)
+        character(len=*), intent(in) :: path
+        integer :: slot
+
+        found = .false.
+        call handle_table_lock()
+        do slot = 1, MAX_OPEN_FILES
+            if (.not. in_use(slot)) cycle
+            if (handle_mode(slot) /= MODE_UNLIMITED) cycle
+            if (trim(unlimited_buffers(slot)%file_path) /= trim(path)) cycle
+            found = .true.
+            exit
+        end do
+        call handle_table_unlock()
+    end function has_persistent_buffer
 
     subroutine h5_close(h5id)
         integer(HID_T), intent(inout) :: h5id

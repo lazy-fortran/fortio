@@ -84,6 +84,11 @@ python benchmark/compare.py \
 python benchmark/compare.py \
   build-benchmark/benchmark_fortio_hdf5 \
   build-benchmark/benchmark_native_hdf5 --enforce
+python benchmark/compare.py \
+  build-benchmark/benchmark_fortio_hdf5_append \
+  build-benchmark/benchmark_native_hdf5_append --enforce
 ```
 
-The comparison uses medians and verifies identical result checksums.
+The third comparison reproduces KAMEL's six-field unlimited time-step matrix
+with a close/reopen cycle per append. All comparisons use medians and verify
+identical result checksums.

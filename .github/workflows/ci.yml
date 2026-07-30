@@ -63,6 +63,11 @@ jobs:
           python3 benchmark/compare.py \
             build-benchmark/benchmark_fortio_hdf5 \
             build-benchmark/benchmark_native_hdf5 --enforce
+      - name: Enforce KAMEL append performance
+        run: |
+          python3 benchmark/compare.py \
+            build-benchmark/benchmark_fortio_hdf5_append \
+            build-benchmark/benchmark_native_hdf5_append --enforce
 
   thread-sanitizer:
     runs-on: ubuntu-latest
