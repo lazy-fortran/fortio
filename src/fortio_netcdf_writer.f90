@@ -506,6 +506,12 @@ contains
             call copy_netcdf4_attributes(writer, this%variables(i)%name, &
                 this%variables(i)%attributes, status)
             if (.not. status%ok()) return
+            if (size(this%variables(i)%dimension_ids) > 0) then
+                call writer%add_i32_attribute(this%variables(i)%name, &
+                    "_Netcdf4Coordinates", &
+                    int(this%variables(i)%dimension_ids, int32), status)
+                if (.not. status%ok()) return
+            end if
         end do
         do i = 1, size(this%dimensions)
             if (.not. coordinate_variables(i)) cycle
