@@ -1,5 +1,6 @@
 module netcdf
-    use, intrinsic :: iso_fortran_env, only: int32, int64, real64
+    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
+    use fortio_bytes, only: decode_be_i32, decode_be_i64
     use fortio_netcdf_classic, only: classic_file_t, NC_BYTE, NC_CHAR, NC_SHORT, &
                                     NC_INT, NC_FLOAT, NC_DOUBLE
     use fortio_netcdf_writer, only: classic_writer_t
@@ -11,6 +12,7 @@ module netcdf
     integer, parameter, public :: NF90_NOERR = FORTIO_SUCCESS
     integer, parameter, public :: NF90_EBADID = FORTIO_ESTATE
     integer, parameter, public :: NF90_ENOTVAR = FORTIO_ENOTFOUND
+    integer, parameter, public :: NF90_ENOTATT = FORTIO_ENOTFOUND
     integer, parameter, public :: NF90_EBADDIM = FORTIO_ENOTFOUND
     integer, parameter, public :: NF90_ENOTSUPPORT = FORTIO_ENOTSUP
     integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
@@ -51,9 +53,16 @@ module netcdf
         module procedure put_r64_scalar, put_r64_rank1, put_r64_rank2, put_r64_rank3
     end interface nf90_put_var
 
+    interface nf90_get_att
+        module procedure get_att_text
+        module procedure get_att_i32_scalar, get_att_i32_rank1
+        module procedure get_att_r64_scalar, get_att_r64_rank1
+    end interface nf90_get_att
+
     public :: nf90_open, nf90_create, nf90_close, nf90_def_dim, nf90_def_var
     public :: nf90_enddef, nf90_inq_varid, nf90_get_var, nf90_put_var, nf90_strerror
     public :: nf90_inq_dimid, nf90_inquire_dimension, nf90_inquire_variable
+    public :: nf90_inquire_attribute, nf90_get_att
 
 contains
 
@@ -281,6 +290,136 @@ contains
         end if
         code = NF90_NOERR
     end function nf90_inquire_variable
+
+    integer function nf90_inquire_attribute(ncid, varid, name, xtype, len) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer, intent(out), optional :: xtype, len
+        integer :: attribute_id
+
+        code = find_attribute(ncid, varid, name, attribute_id)
+        if (code /= NF90_NOERR) return
+        if (present(xtype)) xtype = attribute_type(ncid, varid, attribute_id)
+        if (present(len)) len = attribute_length(ncid, varid, attribute_id)
+    end function nf90_inquire_attribute
+
+    integer function get_att_text(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        character(len=*), intent(out) :: value
+        integer :: attribute_id, i, count
+
+        code = find_attribute(ncid, varid, name, attribute_id)
+        if (code /= NF90_NOERR) return
+        if (attribute_type(ncid, varid, attribute_id) /= NF90_CHAR) then
+            code = NF90_EINVAL
+            return
+        end if
+        count = attribute_length(ncid, varid, attribute_id)
+        value = ""
+        do i = 1, min(count, len(value))
+            value(i:i) = achar(attribute_byte(ncid, varid, attribute_id, i))
+        end do
+    end function get_att_text
+
+    integer function get_att_i32_scalar(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer(int32), intent(out) :: value
+        integer(int32) :: temporary(1)
+
+        code = get_att_i32_rank1(ncid, varid, name, temporary)
+        if (code == NF90_NOERR) value = temporary(1)
+    end function get_att_i32_scalar
+
+    integer function get_att_i32_rank1(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer(int32), intent(out) :: value(:)
+        integer :: attribute_id, i, width
+
+        code = find_attribute(ncid, varid, name, attribute_id)
+        if (code /= NF90_NOERR) return
+        if (size(value) /= attribute_length(ncid, varid, attribute_id)) then
+            code = NF90_EINVAL
+            return
+        end if
+        select case (attribute_type(ncid, varid, attribute_id))
+        case (NF90_INT)
+            width = 4
+            do i = 1, size(value)
+                value(i) = decode_attribute_i32(ncid, varid, attribute_id, i, width)
+            end do
+        case (NF90_BYTE)
+            do i = 1, size(value)
+                value(i) = attribute_byte(ncid, varid, attribute_id, i)
+                if (value(i) > 127) value(i) = value(i) - 256
+            end do
+        case (NF90_SHORT)
+            width = 2
+            do i = 1, size(value)
+                value(i) = decode_attribute_i32(ncid, varid, attribute_id, i, width)
+            end do
+        case default
+            code = NF90_EINVAL
+        end select
+    end function get_att_i32_rank1
+
+    integer function get_att_r64_scalar(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        real(real64), intent(out) :: value
+        real(real64) :: temporary(1)
+
+        code = get_att_r64_rank1(ncid, varid, name, temporary)
+        if (code == NF90_NOERR) value = temporary(1)
+    end function get_att_r64_scalar
+
+    integer function get_att_r64_rank1(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        real(real64), intent(out) :: value(:)
+        integer(int8) :: bytes4(4), bytes8(8)
+        integer(int32) :: bits32
+        integer(int64) :: bits64
+        real(real32) :: value32
+        integer :: attribute_id, i, j, offset
+
+        code = find_attribute(ncid, varid, name, attribute_id)
+        if (code /= NF90_NOERR) return
+        if (size(value) /= attribute_length(ncid, varid, attribute_id)) then
+            code = NF90_EINVAL
+            return
+        end if
+        select case (attribute_type(ncid, varid, attribute_id))
+        case (NF90_DOUBLE)
+            do i = 1, size(value)
+                offset = 8*(i - 1)
+                do j = 1, 8
+                    bytes8(j) = int(attribute_byte(ncid, varid, attribute_id, offset + j), int8)
+                end do
+                bits64 = decode_be_i64(bytes8)
+                value(i) = transfer(bits64, value(i))
+            end do
+        case (NF90_FLOAT)
+            do i = 1, size(value)
+                offset = 4*(i - 1)
+                do j = 1, 4
+                    bytes4(j) = int(attribute_byte(ncid, varid, attribute_id, offset + j), int8)
+                end do
+                bits32 = decode_be_i32(bytes4)
+                value32 = transfer(bits32, value32)
+                value(i) = real(value32, real64)
+            end do
+        case (NF90_INT, NF90_SHORT, NF90_BYTE)
+            do i = 1, size(value)
+                value(i) = real(decode_attribute_i32(ncid, varid, attribute_id, i, &
+                    type_width_compat(attribute_type(ncid, varid, attribute_id))), real64)
+            end do
+        case default
+            code = NF90_EINVAL
+        end select
+    end function get_att_r64_rank1
 
     integer function get_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
@@ -540,6 +679,105 @@ contains
         if (prepare_get) prepare_get = varid <= size(files(ncid)%variables)
         if (.not. prepare_get) call status%set(NF90_ENOTVAR, "invalid variable ID")
     end function prepare_get
+
+    integer function find_attribute(ncid, varid, name, attribute_id) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: attribute_id
+        integer :: i
+
+        attribute_id = 0
+        if (.not. valid_reader(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        if (varid == NF90_GLOBAL) then
+            do i = 1, size(files(ncid)%global_attributes)
+                if (files(ncid)%global_attributes(i)%name == trim(name)) then
+                    attribute_id = i
+                    code = NF90_NOERR
+                    return
+                end if
+            end do
+        else
+            if (varid < 1 .or. varid > size(files(ncid)%variables)) then
+                code = NF90_ENOTVAR
+                return
+            end if
+            do i = 1, size(files(ncid)%variables(varid)%attributes)
+                if (files(ncid)%variables(varid)%attributes(i)%name == trim(name)) then
+                    attribute_id = i
+                    code = NF90_NOERR
+                    return
+                end if
+            end do
+        end if
+        code = NF90_ENOTATT
+    end function find_attribute
+
+    integer function attribute_type(ncid, varid, attribute_id) result(type_code)
+        integer, intent(in) :: ncid, varid, attribute_id
+
+        if (varid == NF90_GLOBAL) then
+            type_code = files(ncid)%global_attributes(attribute_id)%type_code
+        else
+            type_code = files(ncid)%variables(varid)%attributes(attribute_id)%type_code
+        end if
+    end function attribute_type
+
+    integer function attribute_length(ncid, varid, attribute_id) result(element_count)
+        integer, intent(in) :: ncid, varid, attribute_id
+
+        if (varid == NF90_GLOBAL) then
+            element_count = files(ncid)%global_attributes(attribute_id)%element_count
+        else
+            element_count = files(ncid)%variables(varid)%attributes(attribute_id)%element_count
+        end if
+    end function attribute_length
+
+    integer function attribute_byte(ncid, varid, attribute_id, position) result(value)
+        integer, intent(in) :: ncid, varid, attribute_id, position
+
+        if (varid == NF90_GLOBAL) then
+            value = iand(int(files(ncid)%global_attributes(attribute_id)%bytes(position)), 255)
+        else
+            value = iand(int(files(ncid)%variables(varid)%attributes(attribute_id)%bytes(position)), 255)
+        end if
+    end function attribute_byte
+
+    integer(int32) function decode_attribute_i32(ncid, varid, attribute_id, element, &
+                                                 width) result(value)
+        integer, intent(in) :: ncid, varid, attribute_id, element, width
+        integer(int8) :: bytes4(4)
+        integer :: i, offset
+
+        bytes4 = 0_int8
+        offset = width*(element - 1)
+        do i = 1, width
+            bytes4(4 - width + i) = int(attribute_byte(ncid, varid, attribute_id, &
+                                                       offset + i), int8)
+        end do
+        value = decode_be_i32(bytes4)
+        if (width == 2 .and. value >= 32768) value = value - 65536
+        if (width == 1 .and. value >= 128) value = value - 256
+    end function decode_attribute_i32
+
+    pure integer function type_width_compat(type_code) result(width)
+        integer, intent(in) :: type_code
+
+        select case (type_code)
+        case (NF90_BYTE, NF90_CHAR)
+            width = 1
+        case (NF90_SHORT)
+            width = 2
+        case (NF90_INT, NF90_FLOAT)
+            width = 4
+        case (NF90_DOUBLE)
+            width = 8
+        case default
+            width = 0
+        end select
+    end function type_width_compat
 
     integer function finish_status(status)
         type(fortio_status_t), intent(in) :: status
