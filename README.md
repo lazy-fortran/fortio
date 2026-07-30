@@ -6,10 +6,12 @@ Fortio is an MIT-licensed implementation of the NetCDF and HDF5 file-format
 subset used by NEO-2, libneo, and KAMEL. System NetCDF and HDF5 installations
 are test oracles, not production dependencies.
 
-The implementation is intentionally incremental. The current source tree
-contains the native typed file API, byte-order-safe binary primitives, and
-the classic NetCDF reader. NetCDF-4/HDF5 writing and the complete downstream
-compatibility surface are tracked in `COMPATIBILITY.md`.
+The current implementation includes the native typed file API,
+byte-order-safe binary primitives, CDF-1/CDF-2 and NetCDF-4 access, and the
+small HDF5 writer/reader subset required by the downstream codes. It also
+provides their `nf90_*` and ITP `hdf5_tools` compatibility surfaces. The exact
+boundary and deliberately unsupported features are recorded in
+`COMPATIBILITY.md`.
 
 ```fortran
 use fortio, only: fortio_file_t, fortio_status_t
@@ -52,9 +54,11 @@ target_link_libraries(my_program PRIVATE fortio::fortio)
 
 ## Performance comparison
 
-The optional benchmark builds the same dense NetCDF round-trip source once
-against fortio and once against the system NetCDF Fortran library. The system
-library is a benchmark dependency only.
+The optional benchmarks build equivalent supported dense-array round trips
+against Fortio and against the system NetCDF and HDF5 Fortran libraries. They
+alternate execution order, compare median timings, verify identical
+checksums, and fail with `--enforce` if Fortio is slower. The system libraries
+are benchmark and test-oracle dependencies only.
 
 ```sh
 cmake -S . -B build-benchmark \
