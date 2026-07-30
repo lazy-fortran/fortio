@@ -7,7 +7,8 @@ module netcdf
     use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
-        FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST
+        FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST, &
+        FORTIO_EIO, FORTIO_EFORMAT, FORTIO_ETYPE
     use fortio_posix, only: handle_table_lock, handle_table_unlock
     implicit none
     private
@@ -51,7 +52,6 @@ module netcdf
     logical, save :: in_use(MAX_OPEN_FILES) = .false.
     logical, save :: writing(MAX_OPEN_FILES) = .false.
     logical, save :: netcdf4_reading(MAX_OPEN_FILES) = .false.
-    character(len=512), save :: last_error = ""
 
     interface nf90_get_var
         module procedure get_char_scalar, get_char_rank1
@@ -101,13 +101,11 @@ contains
         ncid = -1
         if (mode /= NF90_NOWRITE) then
             code = NF90_ENOTSUPPORT
-            last_error = "classic compatibility writer is not implemented"
             return
         end if
         slot = claim_free_slot()
         if (slot == 0) then
             code = NF90_EBADID
-            last_error = "fortio open-file table is full"
             return
         end if
         call files(slot)%open(path, status)
@@ -116,7 +114,6 @@ contains
             if (status%ok()) call load_netcdf4_metadata(netcdf4_files(slot), status)
             if (.not. status%ok()) then
                 code = status%code
-                last_error = status%message
                 call release_slot(slot)
                 return
             end if
@@ -142,19 +139,16 @@ contains
         end if
         if (exists) then
             code = NF90_EEXIST
-            last_error = "file already exists: "//trim(path)
             return
         end if
         slot = claim_free_slot()
         if (slot == 0) then
             code = NF90_EBADID
-            last_error = "fortio open-file table is full"
             return
         end if
         call writers(slot)%create(path, status)
         code = status%code
         if (.not. status%ok()) then
-            last_error = status%message
             call release_slot(slot)
             return
         end if
@@ -185,7 +179,6 @@ contains
         netcdf4_reading(ncid) = .false.
         call release_slot(ncid)
         code = status%code
-        if (.not. status%ok()) last_error = status%message
     end function nf90_close
 
     integer function nf90_def_dim(ncid, name, length, dimid) result(code)
@@ -919,12 +912,14 @@ contains
             message = "Operation or format feature is not supported"
         case (NF90_EEXIST)
             message = "File already exists"
+        case (FORTIO_EIO)
+            message = "I/O error"
+        case (FORTIO_EFORMAT)
+            message = "Invalid or unsupported file format"
+        case (FORTIO_ETYPE)
+            message = "Incompatible data type"
         case default
-            if (len_trim(last_error) > 0) then
-                message = trim(last_error)
-            else
-                write(message, '("fortio error ", I0)') code
-            end if
+            write(message, '("fortio error ", I0)') code
         end select
     end function nf90_strerror
 
@@ -1486,7 +1481,6 @@ contains
         type(fortio_status_t), intent(in) :: status
 
         finish_status = status%code
-        if (.not. status%ok()) last_error = status%message
     end function finish_status
 
 end module netcdf

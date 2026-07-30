@@ -2,7 +2,7 @@ program test_thread_safety
     use, intrinsic :: iso_fortran_env, only: real64
     use hdf5_tools, only: HID_T, h5_close, h5_get, h5_open
     use netcdf, only: nf90_close, nf90_get_var, nf90_inq_varid, nf90_noerr, &
-        nf90_nowrite, nf90_open
+        nf90_nowrite, nf90_open, nf90_strerror
     implicit none
 
     integer, parameter :: repetitions = 200
@@ -31,6 +31,7 @@ program test_thread_safety
     do iteration = 1, repetitions
         call verify_hdf5(trim(hdf5_path), failure_count)
         call verify_netcdf(trim(netcdf_path), failure_count)
+        call verify_netcdf_error(failure_count)
     end do
     !$omp end parallel do
     if (failure_count /= 0) error stop "concurrent oracle reads failed"
@@ -62,11 +63,33 @@ contains
         if (status == nf90_noerr) status = nf90_inq_varid(file_id, "matrix", variable_id)
         if (status == nf90_noerr) status = nf90_get_var(file_id, variable_id, matrix)
         if (status == nf90_noerr) status = nf90_close(file_id)
-        if (status /= nf90_noerr .or. &
-            any(matrix /= reshape([1, 2, 3, 4, 5, 6], shape(matrix)))) then
+        if (status /= nf90_noerr) then
+            !$omp atomic update
+            failures = failures + 1
+            return
+        end if
+        if (any(matrix /= reshape([1, 2, 3, 4, 5, 6], shape(matrix)))) then
             !$omp atomic update
             failures = failures + 1
         end if
     end subroutine verify_netcdf
+
+    subroutine verify_netcdf_error(failures)
+        integer, intent(inout) :: failures
+        character(len=512) :: message
+        integer :: file_id, status
+
+        status = nf90_open("fortio-intentionally-missing.nc", nf90_nowrite, file_id)
+        message = nf90_strerror(status)
+        if (status == nf90_noerr) then
+            !$omp atomic update
+            failures = failures + 1
+            return
+        end if
+        if (len_trim(message) == 0) then
+            !$omp atomic update
+            failures = failures + 1
+        end if
+    end subroutine verify_netcdf_error
 
 end program test_thread_safety

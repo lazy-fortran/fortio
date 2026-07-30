@@ -52,6 +52,20 @@ FetchContent_MakeAvailable(fortio)
 target_link_libraries(my_program PRIVATE fortio::fortio)
 ```
 
+## Thread-safety contract
+
+Independent handles may be used concurrently. OpenMP readers use separate
+file state, and write sessions targeting the same HDF5 path are serialized so
+that updates are not lost. The compatibility handle tables and diagnostics are
+race-checked in CI with ThreadSanitizer.
+
+The legacy public `h5overwrite` switch is process configuration: set it before
+starting a parallel region and do not mutate it while I/O calls are active.
+This contract does not imply MPI-IO or parallel-HDF5 format support.
+
+The synchronization is always enabled, including in the Release build used by
+the native-library performance comparisons below.
+
 ## Performance comparison
 
 The optional benchmarks build equivalent supported dense-array round trips
