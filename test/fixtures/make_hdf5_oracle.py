@@ -16,8 +16,8 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
         "matrix",
         data=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64),
     )
-    matrix.attrs["lbounds"] = np.array([-2, 5], dtype=np.int32)
-    matrix.attrs["ubounds"] = np.array([0, 6], dtype=np.int32)
+    matrix.attrs["lbounds"] = np.array([-2, 5], dtype=np.int64)
+    matrix.attrs["ubounds"] = np.array([0, 6], dtype=np.int64)
     integer_ranks = handle.create_group("integer_ranks")
     integer_ranks.create_dataset(
         "int_matrix",
