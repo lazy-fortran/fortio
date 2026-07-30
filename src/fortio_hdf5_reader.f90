@@ -26,6 +26,7 @@ module fortio_hdf5_reader
     type, public :: hdf5_attribute_t
         character(len=:), allocatable :: name
         integer(int32), allocatable :: values_i32(:)
+        integer(int64), allocatable :: values_i64(:)
         real(real64), allocatable :: values_r64(:)
         character(len=:), allocatable :: value_text
     end type hdf5_attribute_t
@@ -342,11 +343,21 @@ contains
         if (.not. allocated(dataset%attributes)) return
         do i = 1, size(dataset%attributes)
             if (dataset%attributes(i)%name == name) then
-                if (.not. allocated(dataset%attributes(i)%values_i32)) then
-                    call status%set(FORTIO_ETYPE, "HDF5 attribute is not a 32-bit integer")
+                if (allocated(dataset%attributes(i)%values_i32)) then
+                    values = dataset%attributes(i)%values_i32
+                else if (allocated(dataset%attributes(i)%values_i64)) then
+                    if (any(dataset%attributes(i)%values_i64 > int(huge(0_int32), int64)) .or. &
+                        any(dataset%attributes(i)%values_i64 < &
+                        int(-huge(0_int32) - 1_int32, int64))) then
+                        call status%set(FORTIO_ETYPE, &
+                            "64-bit HDF5 attribute does not fit a 32-bit integer")
+                        return
+                    end if
+                    values = int(dataset%attributes(i)%values_i64, int32)
+                else
+                    call status%set(FORTIO_ETYPE, "HDF5 attribute is not an integer")
                     return
                 end if
-                values = dataset%attributes(i)%values_i32
                 found = .true.
                 return
             end if
@@ -1297,6 +1308,7 @@ contains
         integer :: version, name_size, datatype_size, dataspace_size, rank, i, type_class
         character(len=:), allocatable :: name
         integer(int32), allocatable :: values(:)
+        integer(int64), allocatable :: values_i64(:)
         real(real64), allocatable :: real_values(:)
         character(len=:), allocatable :: text_value
 
@@ -1340,13 +1352,21 @@ contains
         call this%reader%seek(dataspace_start + dataspace_size)
         select case (type_class)
         case (H5_TYPE_INTEGER)
-            if (element_size /= 4) return
-            allocate(values(value_count))
-            do i = 1, size(values)
-                call this%reader%read_le_i32(values(i), status)
-                if (.not. status%ok()) return
-            end do
-            call append_i32_attribute(dataset, name, values)
+            if (element_size == 4) then
+                allocate(values(value_count))
+                do i = 1, size(values)
+                    call this%reader%read_le_i32(values(i), status)
+                    if (.not. status%ok()) return
+                end do
+                call append_i32_attribute(dataset, name, values)
+            else if (element_size == 8) then
+                allocate(values_i64(value_count))
+                do i = 1, size(values_i64)
+                    call this%reader%read_le_i64(values_i64(i), status)
+                    if (.not. status%ok()) return
+                end do
+                call append_i64_attribute(dataset, name, values_i64)
+            end if
         case (H5_TYPE_FLOAT)
             if (element_size /= 8) return
             allocate(real_values(value_count))
@@ -1389,6 +1409,25 @@ contains
         temporary(count + 1)%values_i32 = values
         call move_alloc(temporary, dataset%attributes)
     end subroutine append_i32_attribute
+
+    subroutine append_i64_attribute(dataset, name, values)
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        character(len=*), intent(in) :: name
+        integer(int64), intent(in) :: values(:)
+        type(hdf5_attribute_t), allocatable :: temporary(:)
+        integer :: count
+
+        if (allocated(dataset%attributes)) then
+            count = size(dataset%attributes)
+        else
+            count = 0
+        end if
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = dataset%attributes
+        temporary(count + 1)%name = name
+        temporary(count + 1)%values_i64 = values
+        call move_alloc(temporary, dataset%attributes)
+    end subroutine append_i64_attribute
 
     subroutine append_r64_attribute(dataset, name, values)
         type(hdf5_dataset_t), intent(inout) :: dataset
