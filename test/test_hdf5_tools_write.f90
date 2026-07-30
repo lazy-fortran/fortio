@@ -7,9 +7,12 @@ program test_hdf5_tools_write
     integer(HID_T) :: file_id, group_id
     integer :: scalar, exit_status, unit
     integer :: matrix(2, 3)
+    integer, allocatable :: absent(:)
     real(real64) :: cube(2, 2, 2, 2, 2)
     character(len=512) :: command, dump_path, line, path
     logical :: found_group, found_matrix, found_matrix_shape, found_cube
+    logical :: found_comment, found_comment_value, found_bounds, found_accuracy
+    logical :: found_accuracy_value
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/hdf5-tools-written.h5"
@@ -17,7 +20,9 @@ program test_hdf5_tools_write
     cube = reshape([(real(scalar, real64), scalar = 1, size(cube))], shape(cube))
 
     call h5_create(trim(path), file_id)
-    call h5_add(file_id, "answer", 42, "ignored until attribute support", "1")
+    call h5_add(file_id, "answer", 42, "legacy comment", "1")
+    call h5_add(file_id, "tolerance", 0.25_real64, accuracy=1.0e-8_real64)
+    call h5_add(file_id, "absent", absent, default=7)
     call h5_define_group(file_id, "results", group_id)
     call h5_add(group_id, "matrix", matrix, [1, 1], [2, 3])
     call h5_add(group_id, "cube", cube, [1, 1, 1, 1, 1], [2, 2, 2, 2, 2])
@@ -27,12 +32,14 @@ program test_hdf5_tools_write
     call h5_open(trim(path), file_id)
     call h5_get(file_id, "answer", scalar)
     if (scalar /= 42) error stop "hdf5_tools scalar round trip differs"
+    call h5_get(file_id, "absent", scalar)
+    if (scalar /= 7) error stop "hdf5_tools unallocated default differs"
     call h5_open_group(file_id, "results", group_id)
     call h5_close_group(group_id)
     call h5_close(file_id)
 
     dump_path = trim(path)//".dump"
-    command = "h5dump -H "//trim(path)//" > "//trim(dump_path)
+    command = "h5dump -A "//trim(path)//" > "//trim(dump_path)
     call execute_command_line(trim(command), exitstat=exit_status)
     if (exit_status /= 0) error stop "system h5dump rejected hdf5_tools output"
 
@@ -40,6 +47,11 @@ program test_hdf5_tools_write
     found_matrix = .false.
     found_matrix_shape = .false.
     found_cube = .false.
+    found_comment = .false.
+    found_comment_value = .false.
+    found_bounds = .false.
+    found_accuracy = .false.
+    found_accuracy_value = .false.
     open(newunit=unit, file=trim(dump_path), status="old", action="read")
     do
         read(unit, "(a)", iostat=exit_status) line
@@ -48,11 +60,21 @@ program test_hdf5_tools_write
         if (index(line, 'DATASET "matrix"') > 0) found_matrix = .true.
         if (index(line, 'DATASPACE  SIMPLE { ( 3, 2 )') > 0) found_matrix_shape = .true.
         if (index(line, 'DATASPACE  SIMPLE { ( 2, 2, 2, 2, 2 )') > 0) found_cube = .true.
+        if (index(line, 'ATTRIBUTE "comment"') > 0) found_comment = .true.
+        if (index(line, '"legacy comment"') > 0) found_comment_value = .true.
+        if (index(line, 'ATTRIBUTE "lbounds"') > 0) found_bounds = .true.
+        if (index(line, 'ATTRIBUTE "accuracy"') > 0) found_accuracy = .true.
+        if (index(line, '(0): 1e-08') > 0) found_accuracy_value = .true.
     end do
     close(unit)
     if (.not. found_group) error stop "system h5dump did not find results group"
     if (.not. found_matrix) error stop "system h5dump did not find matrix"
     if (.not. found_matrix_shape) error stop "system h5dump found wrong matrix shape"
     if (.not. found_cube) error stop "system h5dump did not find rank-5 cube"
+    if (.not. found_comment) error stop "system h5dump did not find comment attribute"
+    if (.not. found_comment_value) error stop "system h5dump found wrong comment value"
+    if (.not. found_bounds) error stop "system h5dump did not find bounds attributes"
+    if (.not. found_accuracy) error stop "system h5dump did not find accuracy attribute"
+    if (.not. found_accuracy_value) error stop "system h5dump found wrong accuracy value"
 
 end program test_hdf5_tools_write
