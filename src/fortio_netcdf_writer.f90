@@ -496,8 +496,8 @@ contains
                 j=1, int(this%dimensions(i)%length))]
             call writer%add_i32_1(this%dimensions(i)%name, coordinate_values, status)
             if (.not. status%ok()) return
-            call writer%mark_dimension_scale(this%dimensions(i)%name, i - 1, status, &
-                coordinate_variable=.false.)
+            call mark_netcdf4_dimension_scale(writer, this%dimensions(i)%name, i - 1, &
+                status, coordinate_variable=.false.)
             if (.not. status%ok()) return
         end do
         do i = 1, size(this%variables)
@@ -515,7 +515,8 @@ contains
         end do
         do i = 1, size(this%dimensions)
             if (.not. coordinate_variables(i)) cycle
-            call writer%mark_dimension_scale(this%dimensions(i)%name, i - 1, status)
+            call mark_netcdf4_dimension_scale(writer, this%dimensions(i)%name, i - 1, &
+                status)
             if (.not. status%ok()) return
         end do
         do i = 1, size(this%variables)
@@ -536,6 +537,24 @@ contains
         call writer%close(status)
         if (status%ok()) this%opened = .false.
     end subroutine classic_writer_close_netcdf4
+
+    subroutine mark_netcdf4_dimension_scale(writer, name, dimension_id, status, &
+            coordinate_variable)
+        type(hdf5_writer_t), intent(inout) :: writer
+        character(len=*), intent(in) :: name
+        integer, intent(in) :: dimension_id
+        type(fortio_status_t), intent(inout) :: status
+        logical, intent(in), optional :: coordinate_variable
+
+        if (present(coordinate_variable)) then
+            call writer%mark_dimension_scale(name, status, coordinate_variable)
+        else
+            call writer%mark_dimension_scale(name, status)
+        end if
+        if (.not. status%ok()) return
+        call writer%add_i32_attribute(name, "_Netcdf4Dimid", &
+            [int(dimension_id, int32)], status)
+    end subroutine mark_netcdf4_dimension_scale
 
     subroutine add_netcdf4_variable(writer, variable, dimensions, status)
         type(hdf5_writer_t), intent(inout) :: writer

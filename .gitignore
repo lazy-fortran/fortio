@@ -1,11 +1,15 @@
 build/
 build-*/
+site/
+doc/
 *.mod
 *.o
 *.a
 *.so
 *.dylib
 *.dll
+*.bin
+*.zip
 *.nc
 *.h5
 *.hdf5
