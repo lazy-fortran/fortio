@@ -9,6 +9,7 @@ add_library(fortio
     src/fortio_bytes.f90
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
+    src/fortio_hdf5_reader.f90
     src/fortio.f90
     src/netcdf.f90
 )
@@ -41,6 +42,12 @@ if(BUILD_TESTING)
         COMMAND ncdump -v scalar,x_values,matrix
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.nc")
     set_tests_properties(classic_write_oracle PROPERTIES DEPENDS classic_write)
+
+    add_executable(test_hdf5_read test/test_hdf5_read.f90)
+    target_link_libraries(test_hdf5_read PRIVATE fortio)
+    add_test(NAME hdf5_read COMMAND test_hdf5_read
+        "${CMAKE_CURRENT_BINARY_DIR}/oracle.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py")
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets

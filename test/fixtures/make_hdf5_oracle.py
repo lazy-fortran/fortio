@@ -1,0 +1,17 @@
+import sys
+
+import h5py
+import numpy as np
+
+
+with h5py.File(sys.argv[1], "w", libver="latest") as handle:
+    grid = handle.create_group("grid")
+    grid.create_dataset("Nt", data=np.int32(42))
+    grid.create_dataset(
+        "x_values",
+        data=np.array([1.25, -2.5, 4.75], dtype=np.float32),
+    )
+    grid.create_dataset(
+        "matrix",
+        data=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64),
+    )

@@ -17,6 +17,11 @@ module fortio_bytes
         procedure :: read_be_i64 => reader_read_be_i64
         procedure :: read_be_r32 => reader_read_be_r32
         procedure :: read_be_r64 => reader_read_be_r64
+        procedure :: read_le_i16 => reader_read_le_i16
+        procedure :: read_le_i32 => reader_read_le_i32
+        procedure :: read_le_i64 => reader_read_le_i64
+        procedure :: read_le_r32 => reader_read_le_r32
+        procedure :: read_le_r64 => reader_read_le_r64
         procedure :: read_bytes => reader_read_bytes
     end type byte_reader_t
 
@@ -276,6 +281,70 @@ contains
         if (.not. status%ok()) return
         value = transfer(bits, value)
     end subroutine reader_read_be_r64
+
+    subroutine reader_read_le_i16(this, value, status)
+        class(byte_reader_t), intent(inout) :: this
+        integer(int16), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(2)
+
+        call this%read_bytes(bytes, status)
+        if (.not. status%ok()) return
+        value = int(ior(byte_value(bytes(1)), &
+                        shiftl(byte_value(bytes(2)), 8)), int16)
+    end subroutine reader_read_le_i16
+
+    subroutine reader_read_le_i32(this, value, status)
+        class(byte_reader_t), intent(inout) :: this
+        integer(int32), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(4)
+        integer :: i
+
+        call this%read_bytes(bytes, status)
+        if (.not. status%ok()) return
+        value = 0_int32
+        do i = 1, 4
+            value = ior(value, shiftl(byte_value(bytes(i)), 8*(i - 1)))
+        end do
+    end subroutine reader_read_le_i32
+
+    subroutine reader_read_le_i64(this, value, status)
+        class(byte_reader_t), intent(inout) :: this
+        integer(int64), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(8)
+        integer :: i
+
+        call this%read_bytes(bytes, status)
+        if (.not. status%ok()) return
+        value = 0_int64
+        do i = 1, 8
+            value = ior(value, shiftl(int(byte_value(bytes(i)), int64), 8*(i - 1)))
+        end do
+    end subroutine reader_read_le_i64
+
+    subroutine reader_read_le_r32(this, value, status)
+        class(byte_reader_t), intent(inout) :: this
+        real(real32), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int32) :: bits
+
+        call this%read_le_i32(bits, status)
+        if (.not. status%ok()) return
+        value = transfer(bits, value)
+    end subroutine reader_read_le_r32
+
+    subroutine reader_read_le_r64(this, value, status)
+        class(byte_reader_t), intent(inout) :: this
+        real(real64), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int64) :: bits
+
+        call this%read_le_i64(bits, status)
+        if (.not. status%ok()) return
+        value = transfer(bits, value)
+    end subroutine reader_read_le_r64
 
     pure integer(int16) function decode_be_i16(bytes)
         integer(int8), intent(in) :: bytes(2)
