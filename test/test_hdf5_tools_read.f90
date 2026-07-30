@@ -36,6 +36,10 @@ program test_hdf5_tools_read
     if (continued_value /= 10) error stop "first continued link differs from oracle"
     call h5_get(file_id, "continued/value_4", continued_value)
     if (continued_value /= 14) error stop "last continued link differs from oracle"
+    call h5_get(file_id, "dense/value_00", continued_value)
+    if (continued_value /= 20) error stop "first dense link differs from oracle"
+    call h5_get(file_id, "dense/value_11", continued_value)
+    if (continued_value /= 31) error stop "last dense link differs from oracle"
     call h5_get_bounds(file_id, "grid/matrix", lb1, lb2, ub1, ub2)
     if (any([lb1, lb2, ub1, ub2] /= [-2, 5, 0, 6])) &
         error stop "hdf5_tools bounds differ from h5py oracle"

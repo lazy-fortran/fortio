@@ -7,6 +7,7 @@ module fortio_hdf5_reader
     private
 
     integer, parameter :: H5_MSG_DATASPACE = 1
+    integer, parameter :: H5_MSG_LINK_INFO = 2
     integer, parameter :: H5_MSG_LINK = 6
     integer, parameter :: H5_MSG_LAYOUT = 8
     integer, parameter :: H5_MSG_ATTRIBUTE = 12
@@ -572,6 +573,8 @@ contains
             data_start = this%reader%position
             next_message = data_start + int(size_value, int64)
             select case (message_type)
+            case (H5_MSG_LINK_INFO)
+                if (want_links) call parse_link_info_message(this, links, status)
             case (H5_MSG_LINK)
                 if (want_links) call parse_link_message(this, links, status)
             case (H5_MSG_DATASPACE)
@@ -664,6 +667,148 @@ contains
         temporary(count + 1)%address = address
         call move_alloc(temporary, links)
     end subroutine parse_link_message
+
+    subroutine parse_link_info_message(this, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: byte
+        integer(int64) :: heap_address, tree_address
+        integer :: flags
+
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        if (byte_value(byte) /= 0) return
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        flags = byte_value(byte)
+        if (btest(flags, 0)) call skip_bytes(this%reader, 8_int64)
+        call this%reader%read_le_i64(heap_address, status)
+        call this%reader%read_le_i64(tree_address, status)
+        if (.not. status%ok()) return
+        if (btest(flags, 1)) call skip_bytes(this%reader, 8_int64)
+        if (heap_address == -1_int64 .or. tree_address == -1_int64) return
+        call parse_dense_links(this, heap_address, tree_address, links, status)
+    end subroutine parse_link_info_message
+
+    subroutine parse_dense_links(this, heap_address, tree_address, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: heap_address, tree_address
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), byte
+        integer(int16) :: record_size_i16, depth_i16, record_count_i16
+        integer(int32) :: node_size
+        integer(int64) :: root_address, ignored_i64
+        integer :: tree_type, record_size, depth, record_count, i
+
+        call this%reader%seek(this%base_address + tree_address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(byte, status)
+        call this%reader%read_i8(byte, status)
+        tree_type = byte_value(byte)
+        call this%reader%read_le_i32(node_size, status)
+        call this%reader%read_le_i16(record_size_i16, status)
+        call this%reader%read_le_i16(depth_i16, status)
+        call skip_bytes(this%reader, 2_int64)
+        call this%reader%read_le_i64(root_address, status)
+        call this%reader%read_le_i16(record_count_i16, status)
+        call this%reader%read_le_i64(ignored_i64, status)
+        if (.not. status%ok()) return
+        record_size = iand(int(record_size_i16), int(z'ffff'))
+        depth = iand(int(depth_i16), int(z'ffff'))
+        record_count = iand(int(record_count_i16), int(z'ffff'))
+        if (bytes_text(signature) /= "BTHD" .or. tree_type /= 5 .or. &
+            record_size /= 11 .or. depth /= 0) then
+            call status%set(FORTIO_ENOTSUP, &
+                            "dense HDF5 group B-tree form is not supported")
+            return
+        end if
+        call this%reader%seek(this%base_address + root_address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(byte, status)
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        if (bytes_text(signature) /= "BTLF" .or. byte_value(byte) /= 5) then
+            call status%set(FORTIO_EFORMAT, "invalid dense HDF5 group B-tree leaf")
+            return
+        end if
+        do i = 1, record_count
+            call skip_bytes(this%reader, 4_int64)
+            call parse_dense_heap_id(this, heap_address, links, status)
+            if (.not. status%ok()) return
+        end do
+    end subroutine parse_dense_links
+
+    subroutine parse_dense_heap_id(this, heap_address, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: heap_address
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: byte
+        integer(int16) :: heap_id_length_i16, max_heap_bits_i16, current_rows_i16
+        integer(int64) :: direct_address, object_offset, object_length, saved_position
+        integer :: heap_id_length, offset_width, length_width
+
+        saved_position = this%reader%position
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        if (byte_value(byte) /= 0) then
+            call status%set(FORTIO_ENOTSUP, "only managed dense HDF5 links are supported")
+            return
+        end if
+        call this%reader%seek(this%base_address + heap_address + 6)
+        call this%reader%read_le_i16(heap_id_length_i16, status)
+        call this%reader%seek(this%base_address + heap_address + 129)
+        call this%reader%read_le_i16(max_heap_bits_i16, status)
+        call skip_bytes(this%reader, 2_int64)
+        call this%reader%read_le_i64(direct_address, status)
+        call this%reader%read_le_i16(current_rows_i16, status)
+        if (.not. status%ok()) return
+        if (iand(int(current_rows_i16), int(z'ffff')) /= 0) then
+            call status%set(FORTIO_ENOTSUP, &
+                            "indirect dense HDF5 group heap is not supported")
+            return
+        end if
+        heap_id_length = iand(int(heap_id_length_i16), int(z'ffff'))
+        offset_width = (iand(int(max_heap_bits_i16), int(z'ffff')) + 7)/8
+        length_width = heap_id_length - 1 - offset_width
+        call this%reader%seek(saved_position + 1)
+        call read_unsigned(this%reader, offset_width, object_offset, status)
+        call read_unsigned(this%reader, length_width, object_length, status)
+        saved_position = this%reader%position
+        if (.not. status%ok()) return
+        call parse_dense_link_object(this, direct_address, object_offset, &
+                                     object_length, links, status)
+        call this%reader%seek(saved_position)
+    end subroutine parse_dense_heap_id
+
+    subroutine parse_dense_link_object(this, direct_address, object_offset, &
+                                       object_length, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: direct_address, object_offset, object_length
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), byte
+        integer(int64) :: object_start
+
+        call this%reader%seek(this%base_address + direct_address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        if (bytes_text(signature) /= "FHDB" .or. byte_value(byte) /= 0) then
+            call status%set(FORTIO_EFORMAT, "invalid HDF5 fractal-heap direct block")
+            return
+        end if
+        ! Managed heap offsets are relative to the direct-block signature and
+        ! therefore already include the direct-block header.
+        object_start = this%base_address + direct_address + object_offset + 1
+        call this%reader%seek(object_start)
+        call parse_link_message(this, links, status)
+        if (.not. status%ok()) return
+        if (this%reader%position > object_start + object_length) &
+            call status%set(FORTIO_EFORMAT, "dense HDF5 link exceeds heap object")
+    end subroutine parse_dense_link_object
 
     subroutine parse_dataspace_message(this, dataset, status)
         class(hdf5_file_t), intent(inout) :: this
