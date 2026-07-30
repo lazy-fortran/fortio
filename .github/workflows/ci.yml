@@ -39,3 +39,26 @@ jobs:
           cmake -S examples/cmake-consumer -B consumer-build \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/fortio"
           cmake --build consumer-build --parallel
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU Fortran
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: Configure
+        shell: msys2 {0}
+        run: cmake -S . -B build -G Ninja -DBUILD_TESTING=ON
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+      - name: Test platform backend
+        shell: msys2 {0}
+        run: ctest --test-dir build --output-on-failure -R "^(checksum|bytes|platform_io)$"
