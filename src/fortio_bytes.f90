@@ -20,9 +20,141 @@ module fortio_bytes
         procedure :: read_bytes => reader_read_bytes
     end type byte_reader_t
 
+    type, public :: byte_writer_t
+        integer :: unit = -1
+        integer(int64) :: position = 1_int64
+    contains
+        procedure :: open => writer_open
+        procedure :: close => writer_close
+        procedure :: seek => writer_seek
+        procedure :: write_i8 => writer_write_i8
+        procedure :: write_be_i16 => writer_write_be_i16
+        procedure :: write_be_i32 => writer_write_be_i32
+        procedure :: write_be_i64 => writer_write_be_i64
+        procedure :: write_be_r32 => writer_write_be_r32
+        procedure :: write_be_r64 => writer_write_be_r64
+        procedure :: write_bytes => writer_write_bytes
+    end type byte_writer_t
+
     public :: decode_be_i16, decode_be_i32, decode_be_i64
 
 contains
+
+    subroutine writer_open(this, path, status)
+        class(byte_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+        integer :: io_status
+        character(len=512) :: io_message
+
+        call status%clear()
+        open(newunit=this%unit, file=path, access="stream", form="unformatted", &
+             action="write", status="replace", iostat=io_status, iomsg=io_message)
+        if (io_status /= 0) then
+            call status%set(FORTIO_EIO, trim(io_message))
+            this%unit = -1
+            return
+        end if
+        this%position = 1_int64
+    end subroutine writer_open
+
+    subroutine writer_close(this, status)
+        class(byte_writer_t), intent(inout) :: this
+        type(fortio_status_t), intent(inout) :: status
+        integer :: io_status
+        character(len=512) :: io_message
+
+        call status%clear()
+        if (this%unit == -1) return
+        close(this%unit, iostat=io_status, iomsg=io_message)
+        if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
+        this%unit = -1
+        this%position = 1_int64
+    end subroutine writer_close
+
+    subroutine writer_seek(this, position)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int64), intent(in) :: position
+
+        this%position = position
+    end subroutine writer_seek
+
+    subroutine writer_write_bytes(this, values, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int8), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: io_status
+        character(len=512) :: io_message
+
+        call status%clear()
+        write(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
+        if (io_status /= 0) then
+            call status%set(FORTIO_EIO, trim(io_message))
+            return
+        end if
+        this%position = this%position + size(values, kind=int64)
+    end subroutine writer_write_bytes
+
+    subroutine writer_write_i8(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int8), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%write_bytes([value], status)
+    end subroutine writer_write_i8
+
+    subroutine writer_write_be_i16(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int16), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(2)
+
+        bytes(1) = int(iand(shiftr(value, 8), int(z'ff', int16)), int8)
+        bytes(2) = int(iand(value, int(z'ff', int16)), int8)
+        call this%write_bytes(bytes, status)
+    end subroutine writer_write_be_i16
+
+    subroutine writer_write_be_i32(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int32), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(4)
+        integer :: i
+
+        do i = 1, 4
+            bytes(i) = int(iand(shiftr(value, 8*(4 - i)), int(z'ff', int32)), int8)
+        end do
+        call this%write_bytes(bytes, status)
+    end subroutine writer_write_be_i32
+
+    subroutine writer_write_be_i64(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int64), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(8)
+        integer :: i
+
+        do i = 1, 8
+            bytes(i) = int(iand(shiftr(value, 8*(8 - i)), int(z'ff', int64)), int8)
+        end do
+        call this%write_bytes(bytes, status)
+    end subroutine writer_write_be_i64
+
+    subroutine writer_write_be_r32(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real32), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%write_be_i32(transfer(value, 0_int32), status)
+    end subroutine writer_write_be_r32
+
+    subroutine writer_write_be_r64(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real64), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%write_be_i64(transfer(value, 0_int64), status)
+    end subroutine writer_write_be_r64
 
     subroutine reader_open(this, path, status)
         class(byte_reader_t), intent(inout) :: this

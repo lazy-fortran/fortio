@@ -8,6 +8,7 @@ add_library(fortio
     src/fortio_status.f90
     src/fortio_bytes.f90
     src/fortio_netcdf_classic.f90
+    src/fortio_netcdf_writer.f90
     src/fortio.f90
     src/netcdf.f90
 )
@@ -31,6 +32,15 @@ if(BUILD_TESTING)
     add_test(NAME classic_read COMMAND test_classic_read
         "${CMAKE_CURRENT_BINARY_DIR}/oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
+
+    add_executable(test_classic_write_oracle test/test_classic_write_oracle.f90)
+    target_link_libraries(test_classic_write_oracle PRIVATE fortio)
+    add_test(NAME classic_write COMMAND test_classic_write_oracle
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.nc")
+    add_test(NAME classic_write_oracle
+        COMMAND ncdump -v scalar,x_values,matrix
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.nc")
+    set_tests_properties(classic_write_oracle PROPERTIES DEPENDS classic_write)
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets
