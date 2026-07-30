@@ -366,9 +366,8 @@ contains
 
         call status%clear()
         prepare_put = this%opened
-        if (prepare_put) prepare_put = .not. this%defining
         if (.not. prepare_put) then
-            call status%set(FORTIO_ESTATE, "data write requires data mode")
+            call status%set(FORTIO_ESTATE, "data write requires an open file")
             return
         end if
         prepare_put = id >= 0 .and. id < size(this%variables)
