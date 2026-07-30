@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gfortran:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and independent NetCDF oracle
+        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin
+      - uses: fortran-lang/setup-fpm@v7
+      - name: Build
+        run: fpm build
+      - name: Test
+        run: fpm test
+
+  cmake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and independent NetCDF oracle
+        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Install package
+        run: cmake --install build --prefix "$RUNNER_TEMP/fortio"
+      - name: Verify installed package
+        run: |
+          cmake -S examples/cmake-consumer -B consumer-build \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/fortio"
+          cmake --build consumer-build --parallel

@@ -1,0 +1,10 @@
+build/
+*.mod
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.nc
+*.h5
+*.hdf5
