@@ -25,6 +25,7 @@ module fortio
         procedure :: read_r64_1 => file_read_r64_1
         procedure :: read_r64_2 => file_read_r64_2
         procedure :: read_r64_3 => file_read_r64_3
+        procedure :: read_i32_attribute => file_read_i32_attribute
         generic :: read => read_i32_scalar, read_i32_1, read_r64_scalar, read_r64_1, &
                            read_r64_2, read_r64_3
         final :: file_finalize
@@ -169,6 +170,20 @@ contains
             call status%set(FORTIO_ESTATE, "no supported file is open")
         end select
     end subroutine file_read_r64_3
+
+    subroutine file_read_i32_attribute(this, path, name, values, found, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path, name
+        integer(int32), allocatable, intent(out) :: values(:)
+        logical, intent(out) :: found
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "attributes are only supported for HDF5 here")
+            return
+        end if
+        call this%hdf5%read_i32_attribute(path, name, values, found, status)
+    end subroutine file_read_i32_attribute
 
     pure logical function is_hdf5_signature(bytes)
         integer(int8), intent(in) :: bytes(8)

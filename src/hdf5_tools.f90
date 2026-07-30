@@ -36,9 +36,16 @@ module hdf5_tools
         module procedure h5_add_logical
     end interface h5_add
 
+    interface h5_get_bounds
+        module procedure h5_get_bounds_1
+        module procedure h5_get_bounds_2
+        module procedure h5_get_bounds_3
+    end interface h5_get_bounds
+
     public :: h5_init, h5_deinit, h5_open, h5_close, h5_get
     public :: h5_create, h5_open_rw, h5_define_group, h5_open_group, h5_close_group
     public :: h5_add
+    public :: h5_get_bounds
 
 contains
 
@@ -214,6 +221,73 @@ contains
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
         value = temporary
     end subroutine h5_get_double_2
+
+    subroutine h5_get_bounds_1(h5id, dataset, lb1, ub1)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(inout) :: lb1, ub1
+        integer :: lower(1), upper(1)
+
+        call read_bounds(h5id, dataset, lower, upper)
+        lb1 = lower(1)
+        ub1 = upper(1)
+    end subroutine h5_get_bounds_1
+
+    subroutine h5_get_bounds_2(h5id, dataset, lb1, lb2, ub1, ub2)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(out) :: lb1, lb2, ub1, ub2
+        integer :: lower(2), upper(2)
+
+        call read_bounds(h5id, dataset, lower, upper)
+        lb1 = lower(1)
+        lb2 = lower(2)
+        ub1 = upper(1)
+        ub2 = upper(2)
+    end subroutine h5_get_bounds_2
+
+    subroutine h5_get_bounds_3(h5id, dataset, lb1, lb2, lb3, ub1, ub2, ub3)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(out) :: lb1, lb2, lb3, ub1, ub2, ub3
+        integer :: lower(3), upper(3)
+
+        call read_bounds(h5id, dataset, lower, upper)
+        lb1 = lower(1)
+        lb2 = lower(2)
+        lb3 = lower(3)
+        ub1 = upper(1)
+        ub2 = upper(2)
+        ub3 = upper(3)
+    end subroutine h5_get_bounds_3
+
+    subroutine read_bounds(h5id, dataset, lower, upper)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(out) :: lower(:), upper(:)
+        integer(int32), allocatable :: values(:)
+        type(fortio_status_t) :: status
+        logical :: found
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        lower = 0
+        upper = 0
+        call files(root_slot(slot))%read_i32_attribute(joined_path(slot, dataset), &
+                                                       "lbounds", values, found, status)
+        call require_ok(status)
+        if (found) then
+            if (size(values) /= size(lower)) error stop "HDF5 lower-bound rank mismatch"
+            lower = int(values, kind(lower))
+        end if
+        call files(root_slot(slot))%read_i32_attribute(joined_path(slot, dataset), &
+                                                       "ubounds", values, found, status)
+        call require_ok(status)
+        if (found) then
+            if (size(values) /= size(upper)) error stop "HDF5 upper-bound rank mismatch"
+            upper = int(values, kind(upper))
+        end if
+    end subroutine read_bounds
 
     subroutine h5_add_int(h5id, dataset, value, comment, unit)
         integer(HID_T), intent(in) :: h5id

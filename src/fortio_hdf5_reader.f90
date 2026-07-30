@@ -9,6 +9,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_MSG_DATASPACE = 1
     integer, parameter :: H5_MSG_LINK = 6
     integer, parameter :: H5_MSG_LAYOUT = 8
+    integer, parameter :: H5_MSG_ATTRIBUTE = 12
     integer, parameter :: H5_MSG_CONTINUATION = 16
     integer, parameter :: H5_TYPE_INTEGER = 0
     integer, parameter :: H5_TYPE_FLOAT = 1
@@ -19,6 +20,11 @@ module fortio_hdf5_reader
         integer(int64) :: address = -1_int64
     end type hdf5_link_t
 
+    type :: hdf5_attribute_t
+        character(len=:), allocatable :: name
+        integer(int32), allocatable :: values_i32(:)
+    end type hdf5_attribute_t
+
     type :: hdf5_dataset_t
         integer(int64), allocatable :: dimensions(:)
         integer :: type_class = -1
@@ -26,6 +32,7 @@ module fortio_hdf5_reader
         logical :: little_endian = .true.
         integer(int64) :: data_address = -1_int64
         integer(int64) :: data_size = 0_int64
+        type(hdf5_attribute_t), allocatable :: attributes(:)
     end type hdf5_dataset_t
 
     type, public :: hdf5_file_t
@@ -44,6 +51,7 @@ module fortio_hdf5_reader
         procedure :: read_r64_1 => hdf5_read_r64_1
         procedure :: read_r64_2 => hdf5_read_r64_2
         procedure :: read_r64_3 => hdf5_read_r64_3
+        procedure :: read_i32_attribute => hdf5_read_i32_attribute
     end type hdf5_file_t
 
 contains
@@ -139,6 +147,33 @@ contains
             if (.not. status%ok()) return
         end do
     end subroutine hdf5_read_i32_1
+
+    subroutine hdf5_read_i32_attribute(this, path, name, values, found, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path, name
+        integer(int32), allocatable, intent(out) :: values(:)
+        logical, intent(out) :: found
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer :: i
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        found = .false.
+        allocate(values(0))
+        if (.not. allocated(dataset%attributes)) return
+        do i = 1, size(dataset%attributes)
+            if (dataset%attributes(i)%name == name) then
+                if (.not. allocated(dataset%attributes(i)%values_i32)) then
+                    call status%set(FORTIO_ETYPE, "HDF5 attribute is not a 32-bit integer")
+                    return
+                end if
+                values = dataset%attributes(i)%values_i32
+                found = .true.
+                return
+            end if
+        end do
+    end subroutine hdf5_read_i32_attribute
 
     subroutine hdf5_read_r64_scalar(this, path, value, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -411,6 +446,8 @@ contains
                 if (.not. want_links) call parse_datatype_message(this, dataset, status)
             case (H5_MSG_LAYOUT)
                 if (.not. want_links) call parse_layout_message(this, dataset, status)
+            case (H5_MSG_ATTRIBUTE)
+                if (.not. want_links) call parse_attribute_message(this, dataset, status)
             case (H5_MSG_CONTINUATION)
                 call this%reader%read_le_i64(continuation_address, status)
                 call this%reader%read_le_i64(continuation_size, status)
@@ -556,6 +593,84 @@ contains
         call this%reader%read_le_i64(dataset%data_address, status)
         call this%reader%read_le_i64(dataset%data_size, status)
     end subroutine parse_layout_message
+
+    subroutine parse_attribute_message(this, dataset, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: byte
+        integer(int16) :: name_size_i16, datatype_size_i16, dataspace_size_i16
+        integer(int32) :: element_size
+        integer(int64) :: datatype_start, dataspace_start, value_count
+        integer :: version, name_size, datatype_size, dataspace_size, rank, i
+        character(len=:), allocatable :: name
+        integer(int32), allocatable :: values(:)
+
+        call this%reader%read_i8(byte, status)
+        version = byte_value(byte)
+        call this%reader%read_i8(byte, status)
+        call this%reader%read_le_i16(name_size_i16, status)
+        call this%reader%read_le_i16(datatype_size_i16, status)
+        call this%reader%read_le_i16(dataspace_size_i16, status)
+        call this%reader%read_i8(byte, status)
+        if (.not. status%ok()) return
+        if (version /= 3) return
+        name_size = iand(int(name_size_i16), int(z'ffff'))
+        datatype_size = iand(int(datatype_size_i16), int(z'ffff'))
+        dataspace_size = iand(int(dataspace_size_i16), int(z'ffff'))
+        if (name_size < 1) return
+        allocate(character(len=name_size - 1) :: name)
+        do i = 1, name_size
+            call this%reader%read_i8(byte, status)
+            if (i < name_size) name(i:i) = achar(byte_value(byte))
+        end do
+        if (.not. status%ok()) return
+        datatype_start = this%reader%position
+        call this%reader%read_i8(byte, status)
+        if (iand(byte_value(byte), 15) /= H5_TYPE_INTEGER) return
+        call skip_bytes(this%reader, 3_int64)
+        call this%reader%read_le_i32(element_size, status)
+        if (.not. status%ok()) return
+        if (element_size /= 4) return
+        call this%reader%seek(datatype_start + datatype_size)
+        dataspace_start = this%reader%position
+        call this%reader%read_i8(byte, status)
+        call this%reader%read_i8(byte, status)
+        rank = byte_value(byte)
+        call skip_bytes(this%reader, 2_int64)
+        value_count = 1_int64
+        do i = 1, rank
+            call this%reader%read_le_i64(datatype_start, status)
+            value_count = value_count*datatype_start
+        end do
+        if (.not. status%ok()) return
+        call this%reader%seek(dataspace_start + dataspace_size)
+        allocate(values(value_count))
+        do i = 1, size(values)
+            call this%reader%read_le_i32(values(i), status)
+            if (.not. status%ok()) return
+        end do
+        call append_i32_attribute(dataset, name, values)
+    end subroutine parse_attribute_message
+
+    subroutine append_i32_attribute(dataset, name, values)
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: values(:)
+        type(hdf5_attribute_t), allocatable :: temporary(:)
+        integer :: count
+
+        if (allocated(dataset%attributes)) then
+            count = size(dataset%attributes)
+        else
+            count = 0
+        end if
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = dataset%attributes
+        temporary(count + 1)%name = name
+        temporary(count + 1)%values_i32 = values
+        call move_alloc(temporary, dataset%attributes)
+    end subroutine append_i32_attribute
 
     subroutine read_unsigned(reader, width, value, status)
         type(byte_reader_t), intent(inout) :: reader
