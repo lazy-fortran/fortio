@@ -1,11 +1,18 @@
 module fortio_bytes
+    use, intrinsic :: iso_c_binding, only: c_associated, c_int, c_int64_t, c_loc, &
+        c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
+    use fortio_posix, only: mapped_close, mapped_copy, mapped_open, posix_close, &
+        posix_open_read, posix_open_write, posix_pwrite
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
 
     type, public :: byte_reader_t
         integer :: unit = -1
+        integer :: native_unit = -1
+        integer(c_int) :: descriptor = -1_c_int
+        type(c_ptr) :: mapping = c_null_ptr
         integer(int64) :: position = 1_int64
     contains
         procedure :: open => reader_open
@@ -23,11 +30,13 @@ module fortio_bytes
         procedure :: read_le_i64 => reader_read_le_i64
         procedure :: read_le_r32 => reader_read_le_r32
         procedure :: read_le_r64 => reader_read_le_r64
+        procedure :: read_le_r64_array => reader_read_le_r64_array
         procedure :: read_bytes => reader_read_bytes
     end type byte_reader_t
 
     type, public :: byte_writer_t
         integer :: unit = -1
+        integer(c_int) :: descriptor = -1_c_int
         integer(int64) :: position = 1_int64
     contains
         procedure :: open => writer_open
@@ -44,6 +53,7 @@ module fortio_bytes
         procedure :: write_le_i64 => writer_write_le_i64
         procedure :: write_le_r32 => writer_write_le_r32
         procedure :: write_le_r64 => writer_write_le_r64
+        procedure :: write_le_r64_array => writer_write_le_r64_array
         procedure :: write_bytes => writer_write_bytes
     end type byte_writer_t
 
@@ -67,6 +77,13 @@ contains
             this%unit = -1
             return
         end if
+        this%descriptor = posix_open_write(trim(path)//c_null_char)
+        if (this%descriptor < 0_c_int) then
+            close(this%unit)
+            this%unit = -1
+            call status%set(FORTIO_EIO, "POSIX open failed")
+            return
+        end if
         this%position = 1_int64
     end subroutine writer_open
 
@@ -80,7 +97,9 @@ contains
         if (this%unit == -1) return
         close(this%unit, iostat=io_status, iomsg=io_message)
         if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
+        if (this%descriptor >= 0_c_int) io_status = posix_close(this%descriptor)
         this%unit = -1
+        this%descriptor = -1_c_int
         this%position = 1_int64
     end subroutine writer_close
 
@@ -218,6 +237,31 @@ contains
         call this%write_le_i64(transfer(value, 0_int64), status)
     end subroutine writer_write_le_r64
 
+    subroutine writer_write_le_r64_array(this, values, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real64), contiguous, target, intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+        integer(c_int64_t) :: byte_count, bytes_written
+
+        call status%clear()
+        if (host_is_little_endian()) then
+            byte_count = 8_c_int64_t*size(values, kind=c_int64_t)
+            bytes_written = posix_pwrite(this%descriptor, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+            if (bytes_written /= byte_count) then
+                call status%set(FORTIO_EIO, "POSIX write returned incomplete data")
+                return
+            end if
+            this%position = this%position + int(byte_count, int64)
+        else
+            allocate(bytes(8*size(values)))
+            bytes = transfer(values, bytes)
+            call reverse_elements(bytes, 8)
+            call this%write_bytes(bytes, status)
+        end if
+    end subroutine writer_write_le_r64_array
+
     subroutine writer_write_le_r32(this, value, status)
         class(byte_writer_t), intent(inout) :: this
         real(real32), intent(in) :: value
@@ -242,6 +286,34 @@ contains
             this%unit = -1
             return
         end if
+        open(newunit=this%native_unit, file=path, access="stream", form="unformatted", &
+            action="read", status="old", iostat=io_status, iomsg=io_message)
+        if (io_status /= 0) then
+            close(this%unit)
+            this%unit = -1
+            call status%set(FORTIO_EIO, trim(io_message))
+            return
+        end if
+        this%descriptor = posix_open_read(trim(path)//c_null_char)
+        if (this%descriptor < 0_c_int) then
+            close(this%native_unit)
+            close(this%unit)
+            this%native_unit = -1
+            this%unit = -1
+            call status%set(FORTIO_EIO, "POSIX open failed")
+            return
+        end if
+        this%mapping = mapped_open(this%descriptor)
+        if (.not. c_associated(this%mapping)) then
+            io_status = posix_close(this%descriptor)
+            close(this%native_unit)
+            close(this%unit)
+            this%descriptor = -1_c_int
+            this%native_unit = -1
+            this%unit = -1
+            call status%set(FORTIO_EIO, "memory mapping failed")
+            return
+        end if
         this%position = 1_int64
     end subroutine reader_open
 
@@ -255,7 +327,16 @@ contains
         if (this%unit == -1) return
         close(this%unit, iostat=io_status, iomsg=io_message)
         if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
+        if (this%native_unit /= -1) then
+            close(this%native_unit, iostat=io_status, iomsg=io_message)
+            if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
+        end if
+        if (c_associated(this%mapping)) io_status = mapped_close(this%mapping)
+        if (this%descriptor >= 0_c_int) io_status = posix_close(this%descriptor)
         this%unit = -1
+        this%native_unit = -1
+        this%descriptor = -1_c_int
+        this%mapping = c_null_ptr
         this%position = 1_int64
     end subroutine reader_close
 
@@ -350,7 +431,7 @@ contains
 
     subroutine reader_read_be_r64_array(this, values, status)
         class(byte_reader_t), intent(inout) :: this
-        real(real64), intent(out) :: values(:)
+        real(real64), contiguous, target, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer :: io_status
         character(len=512) :: io_message
@@ -428,6 +509,40 @@ contains
         value = transfer(bits, value)
     end subroutine reader_read_le_r64
 
+    subroutine reader_read_le_r64_array(this, values, status)
+        class(byte_reader_t), intent(inout) :: this
+        real(real64), contiguous, target, intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(c_int64_t) :: bytes_read, byte_count
+
+        call status%clear()
+        if (host_is_little_endian()) then
+            byte_count = 8_c_int64_t*size(values, kind=c_int64_t)
+            bytes_read = mapped_copy(this%mapping, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+            if (bytes_read /= byte_count) then
+                call status%set(FORTIO_EIO, "POSIX read returned incomplete data")
+                return
+            end if
+            this%position = this%position + int(byte_count, int64)
+        else
+            call read_le_r64_array_portable(this, values, status)
+        end if
+    end subroutine reader_read_le_r64_array
+
+    subroutine read_le_r64_array_portable(this, values, status)
+        class(byte_reader_t), intent(inout) :: this
+        real(real64), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+
+        allocate(bytes(8*size(values)))
+        call this%read_bytes(bytes, status)
+        if (.not. status%ok()) return
+        call reverse_elements(bytes, 8)
+        values = transfer(bytes, values)
+    end subroutine read_le_r64_array_portable
+
     pure integer(int16) function decode_be_i16(bytes)
         integer(int8), intent(in) :: bytes(2)
 
@@ -464,5 +579,30 @@ contains
 
         byte_value = iand(int(value, int32), int(z'ff', int32))
     end function byte_value
+
+    logical function host_is_little_endian()
+        integer(int16) :: one
+        integer(int8) :: bytes(2)
+
+        one = 1_int16
+        bytes = transfer(one, bytes)
+        host_is_little_endian = bytes(1) == 1_int8
+    end function host_is_little_endian
+
+    subroutine reverse_elements(bytes, element_size)
+        integer(int8), intent(inout) :: bytes(:)
+        integer, intent(in) :: element_size
+        integer(int8) :: temporary
+        integer :: element, left, right
+
+        do element = 0, size(bytes)/element_size - 1
+            do left = 1, element_size/2
+                right = element_size + 1 - left
+                temporary = bytes(element*element_size + left)
+                bytes(element*element_size + left) = bytes(element*element_size + right)
+                bytes(element*element_size + right) = temporary
+            end do
+        end do
+    end subroutine reverse_elements
 
 end module fortio_bytes

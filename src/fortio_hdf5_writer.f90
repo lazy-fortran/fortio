@@ -735,10 +735,8 @@ contains
                     if (.not. status%ok()) return
                 end do
             case (TYPE_R64)
-                do j = 1, size(this%datasets(i)%values_r64)
-                    call writer%write_le_r64(this%datasets(i)%values_r64(j), status)
-                    if (.not. status%ok()) return
-                end do
+                call writer%write_le_r64_array(this%datasets(i)%values_r64, status)
+                if (.not. status%ok()) return
             case (TYPE_R32)
                 do j = 1, size(this%datasets(i)%values_r32)
                     call writer%write_le_r32(this%datasets(i)%values_r32(j), status)

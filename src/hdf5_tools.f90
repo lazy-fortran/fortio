@@ -620,16 +620,13 @@ contains
     subroutine h5_get_double_2(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
-        real(real64), intent(out) :: value(:, :)
+        real(real64), contiguous, target, intent(out) :: value(:, :)
         type(fortio_status_t) :: status
-        real(real64), allocatable :: temporary(:, :)
         integer :: slot
 
         slot = require_mode(h5id, MODE_READ)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call files(root_slot(slot))%read_into_r64_2(joined_path(slot, dataset), value, status)
         call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = temporary
     end subroutine h5_get_double_2
 
     subroutine h5_get_double_3(h5id, dataset, value)

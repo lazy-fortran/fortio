@@ -46,6 +46,8 @@ module fortio_hdf5_reader
         integer :: length_size = 0
         integer(int64) :: base_address = 0_int64
         integer(int64) :: root_address = -1_int64
+        character(len=:), allocatable :: cached_dataset_path
+        type(hdf5_dataset_t) :: cached_dataset
         logical :: opened = .false.
     contains
         procedure :: open => hdf5_open
@@ -58,6 +60,7 @@ module fortio_hdf5_reader
         procedure :: read_r64_scalar => hdf5_read_r64_scalar
         procedure :: read_r64_1 => hdf5_read_r64_1
         procedure :: read_r64_2 => hdf5_read_r64_2
+        procedure :: read_into_r64_2 => hdf5_read_into_r64_2
         procedure :: read_r64_3 => hdf5_read_r64_3
         procedure :: read_r64_4 => hdf5_read_r64_4
         procedure :: read_r64_5 => hdf5_read_r64_5
@@ -154,6 +157,7 @@ contains
         integer(int32) :: ignored_flags
         integer(int64) :: ignored_address
 
+        if (allocated(this%cached_dataset_path)) deallocate(this%cached_dataset_path)
         call this%reader%open(path, status)
         if (.not. status%ok()) return
         call this%reader%read_bytes(signature, status)
@@ -191,6 +195,7 @@ contains
         type(fortio_status_t), intent(inout) :: status
 
         call this%reader%close(status)
+        if (allocated(this%cached_dataset_path)) deallocate(this%cached_dataset_path)
         this%opened = .false.
     end subroutine hdf5_close
 
@@ -463,10 +468,10 @@ contains
     subroutine hdf5_read_r64_2(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
         character(len=*), intent(in) :: path
-        real(real64), allocatable, intent(out) :: values(:, :)
+        real(real64), allocatable, target, intent(out) :: values(:, :)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_dataset_t) :: dataset
-        real(real64), allocatable :: flat(:)
+        real(real64), pointer :: flat(:)
 
         call find_dataset(this, path, dataset, status)
         if (.not. status%ok()) return
@@ -474,12 +479,50 @@ contains
             call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 2")
             return
         end if
-        call read_r64_flat(this, path, flat, status)
-        if (.not. status%ok()) return
         ! HDF5 stores C dimension order; expose native Fortran order.
         allocate(values(dataset%dimensions(2), dataset%dimensions(1)))
-        values = reshape(flat, shape(values))
+        flat(1:size(values)) => values
+        call read_r64_values(this, dataset, flat, status)
     end subroutine hdf5_read_r64_2
+
+    subroutine hdf5_read_into_r64_2(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), contiguous, target, intent(out) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        real(real64), pointer :: flat(:)
+
+        if (allocated(this%cached_dataset_path)) then
+            if (this%cached_dataset_path == trim(adjustl(path))) then
+                call validate_r64_2_destination(this%cached_dataset, values, status)
+                if (.not. status%ok()) return
+                flat(1:size(values)) => values
+                call read_r64_values(this, this%cached_dataset, flat, status)
+                return
+            end if
+        end if
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        call validate_r64_2_destination(dataset, values, status)
+        if (.not. status%ok()) return
+        flat(1:size(values)) => values
+        call read_r64_values(this, dataset, flat, status)
+    end subroutine hdf5_read_into_r64_2
+
+    subroutine validate_r64_2_destination(dataset, values, status)
+        type(hdf5_dataset_t), intent(in) :: dataset
+        real(real64), intent(in) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (size(dataset%dimensions) /= 2) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 2")
+            return
+        end if
+        if (any(shape(values) /= [dataset%dimensions(2), dataset%dimensions(1)])) &
+            call status%set(FORTIO_ESHAPE, "destination shape does not match dataset")
+    end subroutine validate_r64_2_destination
 
     subroutine hdf5_read_r64_3(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -551,9 +594,7 @@ contains
         real(real64), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_dataset_t) :: dataset
-        real(real32) :: value_r32
         integer(int64) :: count
-        integer :: i
 
         call find_dataset(this, path, dataset, status)
         if (.not. status%ok()) return
@@ -563,17 +604,28 @@ contains
         end if
         count = product(dataset%dimensions)
         allocate(values(count))
+        call read_r64_values(this, dataset, values, status)
+    end subroutine read_r64_flat
+
+    subroutine read_r64_values(this, dataset, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_dataset_t), intent(in) :: dataset
+        real(real64), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        real(real32) :: value_r32
+        integer :: i
+
         call this%reader%seek(this%base_address + dataset%data_address + 1)
         select case (dataset%element_size)
         case (8)
-            do i = 1, size(values)
-                if (dataset%little_endian) then
-                    call this%reader%read_le_r64(values(i), status)
-                else
+            if (dataset%little_endian) then
+                call this%reader%read_le_r64_array(values, status)
+            else
+                do i = 1, size(values)
                     call this%reader%read_be_r64(values(i), status)
-                end if
-                if (.not. status%ok()) return
-            end do
+                    if (.not. status%ok()) return
+                end do
+            end if
         case (4)
             do i = 1, size(values)
                 if (dataset%little_endian) then
@@ -587,7 +639,7 @@ contains
         case default
             call status%set(FORTIO_ETYPE, "floating-point width is not supported")
         end select
-    end subroutine read_r64_flat
+    end subroutine read_r64_values
 
     subroutine hdf5_read_c64_1(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -693,6 +745,12 @@ contains
             call status%set(FORTIO_ENOTFOUND, "HDF5 dataset path is empty")
             return
         end if
+        if (allocated(this%cached_dataset_path)) then
+            if (this%cached_dataset_path == remaining) then
+                dataset = this%cached_dataset
+                return
+            end if
+        end if
         address = this%root_address
         do
             separator = index(remaining, "/")
@@ -710,6 +768,14 @@ contains
             if (len(remaining) == 0) exit
         end do
         call parse_dataset_header(this, address, dataset, status)
+        if (status%ok()) then
+            this%cached_dataset_path = trim(adjustl(path))
+            do while (len(this%cached_dataset_path) > 0)
+                if (this%cached_dataset_path(1:1) /= "/") exit
+                this%cached_dataset_path = this%cached_dataset_path(2:)
+            end do
+            this%cached_dataset = dataset
+        end if
     end subroutine find_dataset
 
     subroutine resolve_object_address(this, path, address, status)
