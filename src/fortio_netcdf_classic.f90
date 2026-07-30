@@ -59,6 +59,8 @@ module fortio_netcdf_classic
         procedure :: variable_shape => classic_variable_shape
         procedure :: read_i32_scalar => classic_read_i32_scalar
         procedure :: read_i32_1 => classic_read_i32_1
+        procedure :: read_char_scalar => classic_read_char_scalar
+        procedure :: read_char_1 => classic_read_char_1
         procedure :: read_r64_scalar => classic_read_r64_scalar
         procedure :: read_r64_1 => classic_read_r64_1
         procedure :: read_r64_2 => classic_read_r64_2
@@ -213,6 +215,55 @@ contains
             if (.not. status%ok()) return
         end do
     end subroutine classic_read_i32_1
+
+    subroutine classic_read_char_scalar(this, name, value, status)
+        class(classic_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        character(len=*), intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        character(len=1) :: temporary(1)
+
+        if (len(value) /= 1) then
+            call status%set(FORTIO_ESHAPE, "character scalar must have length one")
+            return
+        end if
+        call this%read_char_1(name, temporary, status)
+        if (status%ok()) value = temporary(1)
+    end subroutine classic_read_char_scalar
+
+    subroutine classic_read_char_1(this, name, values, status)
+        class(classic_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        character(len=*), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: byte
+        integer :: variable_id, i, j
+
+        call status%clear()
+        variable_id = this%variable_id(name)
+        if (variable_id == 0) then
+            call status%set(FORTIO_ENOTFOUND, "variable not found: "//trim(name))
+            return
+        end if
+        if (this%variables(variable_id)%type_code /= NC_CHAR) then
+            call status%set(FORTIO_ETYPE, "variable is not character data")
+            return
+        end if
+        if (len(values)*size(values, kind=int64) /= &
+            this%variables(variable_id)%element_count) then
+            call status%set(FORTIO_ESHAPE, "character destination shape mismatch")
+            return
+        end if
+        call seek_variable(this, variable_id, status)
+        if (.not. status%ok()) return
+        do i = 1, size(values)
+            do j = 1, len(values)
+                call this%reader%read_i8(byte, status)
+                if (.not. status%ok()) return
+                values(i)(j:j) = achar(byte_unsigned(byte))
+            end do
+        end do
+    end subroutine classic_read_char_1
 
     subroutine classic_read_r64_scalar(this, name, value, status)
         class(classic_file_t), intent(inout) :: this

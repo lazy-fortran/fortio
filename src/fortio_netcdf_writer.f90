@@ -1,7 +1,7 @@
 module fortio_netcdf_writer
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use fortio_bytes, only: byte_writer_t
-    use fortio_netcdf_classic, only: NC_INT, NC_DOUBLE
+    use fortio_netcdf_classic, only: NC_CHAR, NC_INT, NC_DOUBLE
     use fortio_status, only: fortio_status_t, FORTIO_ESTATE, FORTIO_ETYPE, &
                             FORTIO_ESHAPE, FORTIO_ENOTFOUND
     implicit none
@@ -31,6 +31,7 @@ module fortio_netcdf_writer
         integer :: type_code = 0
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
+        character(len=:), allocatable :: value_chars
         type(writer_attribute_t), allocatable :: attributes(:)
         integer(int64) :: begin_offset = 0_int64
         integer(int64) :: value_size = 0_int64
@@ -53,6 +54,8 @@ module fortio_netcdf_writer
         procedure :: put_attribute_r64 => classic_writer_put_attribute_r64
         procedure :: put_i32_scalar => classic_writer_put_i32_scalar
         procedure :: put_i32_1 => classic_writer_put_i32_1
+        procedure :: put_char_scalar => classic_writer_put_char_scalar
+        procedure :: put_char_1 => classic_writer_put_char_1
         procedure :: put_r64_scalar => classic_writer_put_r64_scalar
         procedure :: put_r64_1 => classic_writer_put_r64_1
         procedure :: put_r64_2 => classic_writer_put_r64_2
@@ -139,6 +142,10 @@ contains
             count_values = count_values*this%dimensions(dimension_ids(i) + 1)%length
         end do
         select case (type_code)
+        case (NC_CHAR)
+            allocate(character(len=count_values) :: temporary(count + 1)%value_chars)
+            temporary(count + 1)%value_chars = repeat(achar(0), int(count_values))
+            temporary(count + 1)%value_size = padded_size(count_values)
         case (NC_INT)
             allocate(temporary(count + 1)%values_i32(count_values), source=0_int32)
             temporary(count + 1)%value_size = padded_size(4_int64*count_values)
@@ -241,6 +248,33 @@ contains
         this%variables(id + 1)%values_i32 = values
     end subroutine classic_writer_put_i32_1
 
+    subroutine classic_writer_put_char_scalar(this, id, value, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        character(len=*), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        if (.not. prepare_put(this, id, NC_CHAR, int(len(value), int64), status)) return
+        this%variables(id + 1)%value_chars = value
+    end subroutine classic_writer_put_char_scalar
+
+    subroutine classic_writer_put_char_1(this, id, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        character(len=*), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int64) :: count
+        integer :: i, first, last
+
+        count = int(len(values), int64)*size(values, kind=int64)
+        if (.not. prepare_put(this, id, NC_CHAR, count, status)) return
+        do i = 1, size(values)
+            first = (i - 1)*len(values) + 1
+            last = first + len(values) - 1
+            this%variables(id + 1)%value_chars(first:last) = values(i)
+        end do
+    end subroutine classic_writer_put_char_1
+
     subroutine classic_writer_put_r64_scalar(this, id, value, status)
         class(classic_writer_t), intent(inout) :: this
         integer, intent(in) :: id
@@ -295,6 +329,8 @@ contains
         do i = 1, size(this%variables)
             call writer%seek(this%variables(i)%begin_offset + 1)
             select case (this%variables(i)%type_code)
+            case (NC_CHAR)
+                call write_text_value(writer, this%variables(i)%value_chars, status)
             case (NC_INT)
                 call write_i32_values(writer, this%variables(i)%values_i32, status)
             case (NC_DOUBLE)
@@ -333,6 +369,8 @@ contains
             return
         end if
         select case (type_code)
+        case (NC_CHAR)
+            prepare_put = len(this%variables(id + 1)%value_chars, kind=int64) == count
         case (NC_INT)
             prepare_put = size(this%variables(id + 1)%values_i32, kind=int64) == count
         case (NC_DOUBLE)
@@ -566,6 +604,20 @@ contains
             if (.not. status%ok()) return
         end do
     end subroutine write_i32_values
+
+    subroutine write_text_value(writer, value, status)
+        type(byte_writer_t), intent(inout) :: writer
+        character(len=*), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+        integer :: i
+
+        allocate(bytes(len(value)))
+        do i = 1, len(value)
+            bytes(i) = int(iachar(value(i:i)), int8)
+        end do
+        call writer%write_bytes(bytes, status)
+    end subroutine write_text_value
 
     subroutine write_r64_values(writer, values, status)
         type(byte_writer_t), intent(inout) :: writer

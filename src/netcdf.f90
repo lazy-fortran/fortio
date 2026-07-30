@@ -40,6 +40,7 @@ module netcdf
     character(len=512), save :: last_error = ""
 
     interface nf90_get_var
+        module procedure get_char_scalar, get_char_rank1
         module procedure get_i32_scalar, get_i32_rank1
         module procedure get_r64_scalar, get_r64_rank1, get_r64_rank2, get_r64_rank3
     end interface nf90_get_var
@@ -49,6 +50,7 @@ module netcdf
     end interface nf90_def_var
 
     interface nf90_put_var
+        module procedure put_char_scalar, put_char_rank1
         module procedure put_i32_scalar, put_i32_rank1
         module procedure put_r64_scalar, put_r64_rank1, put_r64_rank2, put_r64_rank3
     end interface nf90_put_var
@@ -214,13 +216,21 @@ contains
             varid = -1
             return
         end if
-        varid = files(ncid)%variable_id(name)
-        if (varid == 0) then
-            code = NF90_ENOTVAR
-            varid = -1
+        if (writing(ncid)) then
+            varid = writer_variable_id(ncid, name)
+            if (varid < 0) then
+                code = NF90_ENOTVAR
+                return
+            end if
         else
-            code = NF90_NOERR
+            varid = files(ncid)%variable_id(name)
+            if (varid == 0) then
+                code = NF90_ENOTVAR
+                varid = -1
+                return
+            end if
         end if
+        code = NF90_NOERR
     end function nf90_inq_varid
 
     integer function nf90_inq_dimid(ncid, name, dimid) result(code)
@@ -498,6 +508,32 @@ contains
         code = finish_status(status)
     end function get_i32_scalar
 
+    integer function get_char_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(out) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_char_scalar(files(ncid)%variables(varid)%name, value, status)
+        code = finish_status(status)
+    end function get_char_scalar
+
+    integer function get_char_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(out) :: value(:)
+        type(fortio_status_t) :: status
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_char_1(files(ncid)%variables(varid)%name, value, status)
+        code = finish_status(status)
+    end function get_char_rank1
+
     integer function get_i32_rank1(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         integer(int32), intent(out) :: value(:)
@@ -601,6 +637,32 @@ contains
         code = finish_status(status)
     end function put_i32_scalar
 
+    integer function put_char_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_char_scalar(varid, value, status)
+        code = finish_status(status)
+    end function put_char_scalar
+
+    integer function put_char_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: value(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_char_1(varid, value, status)
+        code = finish_status(status)
+    end function put_char_rank1
+
     integer function put_i32_rank1(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
         integer(int32), intent(in) :: value(:)
@@ -699,6 +761,20 @@ contains
             end if
         end do
     end function first_free_slot
+
+    integer function writer_variable_id(ncid, name) result(varid)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        varid = -1
+        do i = 1, size(writers(ncid)%variables)
+            if (writers(ncid)%variables(i)%name == trim(name)) then
+                varid = i - 1
+                return
+            end if
+        end do
+    end function writer_variable_id
 
     logical function valid_id(ncid)
         integer, intent(in) :: ncid
