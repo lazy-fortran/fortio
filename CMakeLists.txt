@@ -53,6 +53,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/metadata-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
 
+    add_executable(test_netcdf4_read test/test_netcdf4_read.f90)
+    target_link_libraries(test_netcdf4_read PRIVATE fortio)
+    add_test(NAME netcdf4_read COMMAND test_netcdf4_read
+        "${CMAKE_CURRENT_BINARY_DIR}/netcdf4-oracle.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/netcdf4-oracle.cdl")
+
     add_executable(test_netcdf_attributes test/test_netcdf_attributes.f90)
     target_link_libraries(test_netcdf_attributes PRIVATE fortio)
     add_test(NAME netcdf_attributes COMMAND test_netcdf_attributes

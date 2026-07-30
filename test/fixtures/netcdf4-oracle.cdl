@@ -1,0 +1,15 @@
+netcdf netcdf4_oracle {
+dimensions:
+    radius = 3 ;
+    mode = 2 ;
+variables:
+    int count ;
+    int indices(mode) ;
+    double radius_values(radius) ;
+    double coefficients(mode, radius) ;
+data:
+    count = 3 ;
+    indices = 4, 9 ;
+    radius_values = 1.25, -2.5, 4.75 ;
+    coefficients = 1, 2, 3, 4, 5, 6 ;
+}
