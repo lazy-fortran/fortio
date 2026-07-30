@@ -1,7 +1,7 @@
 program test_hdf5_tools_read
     use, intrinsic :: iso_fortran_env, only: real64
     use hdf5_tools, only: HID_T, h5_init, h5_deinit, h5_open, h5_close, h5_get, &
-                          h5_get_bounds
+                          h5_get_bounds, h5_exists, h5_obj_exists
     implicit none
 
     integer(HID_T) :: file_id
@@ -12,6 +12,7 @@ program test_hdf5_tools_read
     real(real64) :: x(3), matrix(3, 2)
     real(real64) :: real_cube(3, 2, 2)
     real(real64) :: rank4(3, 2, 1, 2), rank5(2, 1, 2, 1, 2)
+    logical :: object_exists
 
     call get_command_argument(1, fixture)
     if (len_trim(fixture) == 0) fixture = "build/hdf5-tools-oracle.h5"
@@ -45,6 +46,11 @@ program test_hdf5_tools_read
         error stop "hdf5_tools bounds differ from h5py oracle"
     call h5_get_bounds(file_id, "grid/Nt", lb1, ub1)
     if (lb1 /= 0 .or. ub1 /= 0) error stop "missing bounds do not default to zero"
+    if (.not. h5_exists(file_id, "grid/matrix")) error stop "existing dataset not found"
+    if (.not. h5_exists(file_id, "dense")) error stop "existing dense group not found"
+    if (h5_exists(file_id, "grid/missing")) error stop "missing dataset reported present"
+    call h5_obj_exists(file_id, "dense/value_11", object_exists)
+    if (.not. object_exists) error stop "h5_obj_exists missed dense dataset"
     call h5_close(file_id)
     call h5_deinit()
 
