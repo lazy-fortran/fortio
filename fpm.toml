@@ -10,7 +10,7 @@ auto-executables = false
 auto-examples = false
 auto-tests = true
 module-naming = false
-link = ["pthread", "z"]
+link = ["pthread"]
 
 [install]
 library = true

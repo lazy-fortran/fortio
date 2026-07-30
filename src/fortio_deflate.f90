@@ -1,6 +1,8 @@
 module fortio_deflate
     use, intrinsic :: iso_c_binding, only: c_double, c_int, c_int8_t, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int64, real64
+    use fortio_deflate_compress, only: zlib_compress_into
+    use fortio_deflate_decompress, only: zlib_decompress
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -9,33 +11,15 @@ module fortio_deflate
         unshuffle_r64
 
     interface
-        function c_deflate_bound(input_size) bind(C, name="fortio_deflate_bound") &
-                result(output_size)
-            import :: c_size_t
-            integer(c_size_t), value :: input_size
-            integer(c_size_t) :: output_size
-        end function c_deflate_bound
-
-        function c_deflate_compress(input, input_size, output, output_size, level) &
-                bind(C, name="fortio_deflate_compress") result(code)
+        function c_inflate_fixed_zlib(input, input_size, output, output_size) &
+                bind(C, name="fortio_inflate_fixed_zlib") result(code)
             import :: c_int, c_int8_t, c_size_t
             integer(c_int8_t), intent(in) :: input(*)
             integer(c_size_t), value :: input_size
             integer(c_int8_t), intent(out) :: output(*)
-            integer(c_size_t), intent(inout) :: output_size
-            integer(c_int), value :: level
+            integer(c_size_t), value :: output_size
             integer(c_int) :: code
-        end function c_deflate_compress
-
-        function c_deflate_uncompress(input, input_size, output, output_size) &
-                bind(C, name="fortio_deflate_uncompress") result(code)
-            import :: c_int, c_int8_t, c_size_t
-            integer(c_int8_t), intent(in) :: input(*)
-            integer(c_size_t), value :: input_size
-            integer(c_int8_t), intent(out) :: output(*)
-            integer(c_size_t), intent(inout) :: output_size
-            integer(c_int) :: code
-        end function c_deflate_uncompress
+        end function c_inflate_fixed_zlib
 
         subroutine c_shuffle(input, output, count, element_size) &
                 bind(C, name="fortio_shuffle")
@@ -69,20 +53,14 @@ contains
         integer, intent(in) :: level
         integer(int8), allocatable, intent(out) :: output(:)
         type(fortio_status_t), intent(inout) :: status
-        integer(c_int) :: code
-        integer(c_size_t) :: output_size
+        integer :: output_size
 
         call status%clear()
-        output_size = c_deflate_bound(int(size(input), c_size_t))
-        allocate(output(int(output_size, int64)))
-        code = c_deflate_compress(input, int(size(input), c_size_t), output, &
-            output_size, int(level, c_int))
-        if (code /= 0_c_int) then
-            call status%set(FORTIO_EIO, "deflate compression failed")
-            deallocate(output)
+        if (level < 0 .or. level > 9) then
+            call status%set(FORTIO_EIO, "deflate compression level is invalid")
             return
         end if
-        output = output(:int(output_size, int64))
+        call zlib_compress_into(input, size(input), output, output_size)
     end subroutine deflate_compress
 
     subroutine deflate_uncompress(input, expected_size, output, status)
@@ -90,17 +68,23 @@ contains
         integer(int64), intent(in) :: expected_size
         integer(int8), allocatable, intent(out) :: output(:)
         type(fortio_status_t), intent(inout) :: status
-        integer(c_int) :: code
-        integer(c_size_t) :: output_size
+        integer :: code
+        integer(int8), allocatable :: decoded(:)
+        character(len=96) :: message
 
         call status%clear()
-        allocate(output(expected_size))
-        output_size = int(expected_size, c_size_t)
-        code = c_deflate_uncompress(input, int(size(input), c_size_t), output, output_size)
-        if (code /= 0_c_int .or. int(output_size, int64) /= expected_size) then
-            call status%set(FORTIO_EIO, "deflate decompression failed")
-            deallocate(output)
+        allocate(output(int(expected_size)))
+        code = c_inflate_fixed_zlib(input, int(size(input), c_size_t), output, &
+            int(expected_size, c_size_t))
+        if (code == 0) return
+        deallocate(output)
+        decoded = zlib_decompress(input, size(input), code, .true.)
+        if (code /= 0 .or. int(size(decoded), int64) /= expected_size) then
+            write (message, '("deflate decompression failed with code ",i0)') code
+            call status%set(FORTIO_EIO, trim(message))
+            return
         end if
+        call move_alloc(decoded, output)
     end subroutine deflate_uncompress
 
     subroutine shuffle_bytes(input, element_size, output)

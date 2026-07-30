@@ -579,11 +579,9 @@ contains
         call append_attribute(this%groups(1)%attributes, attribute, status)
     end subroutine hdf5_add_root_r64_attribute
 
-    subroutine hdf5_mark_dimension_scale(this, dataset_name, dimension_id, status, &
-            coordinate_variable)
+    subroutine hdf5_mark_dimension_scale(this, dataset_name, status, coordinate_variable)
         class(hdf5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: dataset_name
-        integer, intent(in) :: dimension_id
         type(fortio_status_t), intent(inout) :: status
         logical, intent(in), optional :: coordinate_variable
         integer :: dataset_id
@@ -607,9 +605,6 @@ contains
             call append_dimension_scale_text(this%datasets(dataset_id)%attributes, &
                 "NAME", scale_name, status)
         end if
-        if (.not. status%ok()) return
-        call this%add_i32_attribute(dataset_name, "_Netcdf4Dimid", &
-            [int(dimension_id, int32)], status)
     end subroutine hdf5_mark_dimension_scale
 
     subroutine hdf5_set_dimension_list(this, dataset_name, scale_names, status)

@@ -3,7 +3,6 @@ project(fortio VERSION 0.1.0 LANGUAGES C Fortran)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-find_package(ZLIB REQUIRED)
 option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OFF)
 option(FORTIO_BUILD_TESTING "Build fortio tests" ${PROJECT_IS_TOP_LEVEL})
 option(FORTIO_INSTALL "Install fortio targets and package files" ${PROJECT_IS_TOP_LEVEL})
@@ -14,19 +13,23 @@ add_library(fortio
     src/fortio_status.f90
     src/fortio_checksum.f90
     src/fortio_deflate.c
+    src/fortio_deflate_checksums.f90
+    src/fortio_deflate_compress.f90
+    src/fortio_deflate_decompress.f90
+    src/fortio_compression.f90
     src/fortio_deflate.f90
     src/fortio_bytes.f90
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
     src/fortio_hdf5_reader.f90
     src/fortio_hdf5_writer.f90
+    src/fortio_zip.f90
     src/fortio.f90
     src/hdf5_tools.f90
     src/h5lt.f90
     src/hdf5_tools_f2003.f90
     src/netcdf.f90
 )
-target_link_libraries(fortio PUBLIC ZLIB::ZLIB)
 add_library(fortio::fortio ALIAS fortio)
 target_link_libraries(fortio PUBLIC pthread)
 set_target_properties(fortio PROPERTIES
@@ -98,6 +101,21 @@ if(FORTIO_BUILD_TESTING)
     add_executable(test_checksum test/test_checksum.f90)
     target_link_libraries(test_checksum PRIVATE fortio)
     add_test(NAME checksum COMMAND test_checksum)
+
+    add_executable(test_deflate test/test_deflate.f90)
+    target_link_libraries(test_deflate PRIVATE fortio)
+    add_test(NAME deflate COMMAND test_deflate
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-zlib.bin"
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-zlib.raw"
+        "${CMAKE_CURRENT_BINARY_DIR}/oracle-zlib.bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/compression_oracle.py")
+
+    add_executable(test_zip test/test_zip.f90)
+    target_link_libraries(test_zip PRIVATE fortio)
+    add_test(NAME zip COMMAND test_zip
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-test.zip"
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-source.bin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_zip.py")
 
     add_executable(test_bytes test/test_bytes.f90)
     target_link_libraries(test_bytes PRIVATE fortio)

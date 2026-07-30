@@ -1,9 +1,13 @@
 module fortio
+    !! Native typed file, compression, and ZIP API.
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use fortio_bytes, only: byte_reader_t
+    use fortio_compression, only: calculate_crc32, compress_raw, compress_zlib, &
+        decompress_zlib
     use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
     use fortio_netcdf_classic, only: classic_file_t
     use fortio_status
+    use fortio_zip, only: zip_writer_t
     implicit none
     private
 
@@ -12,6 +16,7 @@ module fortio
     integer, parameter :: FORMAT_HDF5 = 2
 
     type, public :: fortio_file_t
+        !! Format-detecting file handle for the supported NetCDF and HDF5 subset.
         private
         integer :: format = FORMAT_NONE
         type(classic_file_t) :: classic
@@ -51,6 +56,8 @@ module fortio
     public :: FORTIO_ETYPE, FORTIO_ESHAPE, FORTIO_ENOTSUP, FORTIO_ESTATE
     public :: FORTIO_EEXIST
     public :: hdf5_attribute_t
+    public :: calculate_crc32, compress_raw, compress_zlib, decompress_zlib
+    public :: zip_writer_t
 
 contains
 

@@ -115,7 +115,6 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-zlib
       - name: Configure
         shell: msys2 {0}
         run: cmake -S . -B build -G Ninja -DBUILD_TESTING=ON

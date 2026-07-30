@@ -3,7 +3,7 @@ program test_netcdf4_deflate
     use netcdf, only: NF90_CLOBBER, NF90_DOUBLE, NF90_INT, NF90_NETCDF4, NF90_NOWRITE, &
         NF90_NOERR, nf90_close, nf90_create, nf90_def_dim, nf90_def_var, &
         nf90_def_var_deflate, nf90_enddef, nf90_get_var, nf90_inq_varid, nf90_open, &
-        nf90_inquire_variable, nf90_put_var
+        nf90_inquire_variable, nf90_put_var, nf90_strerror
     implicit none
 
     real(real64) :: values(64, 32)
@@ -77,7 +77,10 @@ program test_netcdf4_deflate
         error stop "field metadata differs"
     end if
     status = nf90_get_var(ncid, var_field, readback)
-    if (status /= NF90_NOERR) error stop "read compressed field"
+    if (status /= NF90_NOERR) then
+        print *, trim(nf90_strerror(status))
+        error stop "read compressed field"
+    end if
     if (any(readback /= values)) error stop "compressed field roundtrip differs"
     status = nf90_close(ncid)
     if (status /= NF90_NOERR) error stop "close compressed NetCDF-4 reader"

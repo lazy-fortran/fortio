@@ -1,4 +1,5 @@
 module fortio_status
+    !! Status codes and diagnostic messages returned by the native API.
     implicit none
     private
 
@@ -13,6 +14,7 @@ module fortio_status
     integer, parameter, public :: FORTIO_EEXIST = -8
 
     type, public :: fortio_status_t
+        !! Result of an operation; `ok()` is true only for `FORTIO_SUCCESS`.
         integer :: code = FORTIO_SUCCESS
         character(len=:), allocatable :: message
     contains

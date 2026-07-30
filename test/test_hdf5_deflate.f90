@@ -27,11 +27,15 @@ program test_hdf5_deflate
     if (.not. status%ok()) error stop status%message
     call writer%add_i32_1("particle", particle, status)
     if (.not. status%ok()) error stop status%message
-    call writer%mark_dimension_scale("particle", 0, status)
+    call writer%mark_dimension_scale("particle", status)
+    if (.not. status%ok()) error stop status%message
+    call writer%add_i32_attribute("particle", "_Netcdf4Dimid", [0_int32], status)
     if (.not. status%ok()) error stop status%message
     call writer%add_i32_1("timestep", timestep, status)
     if (.not. status%ok()) error stop status%message
-    call writer%mark_dimension_scale("timestep", 1, status)
+    call writer%mark_dimension_scale("timestep", status)
+    if (.not. status%ok()) error stop status%message
+    call writer%add_i32_attribute("timestep", "_Netcdf4Dimid", [1_int32], status)
     if (.not. status%ok()) error stop status%message
     call writer%add_r64_2("field", values, status)
     if (.not. status%ok()) error stop status%message
