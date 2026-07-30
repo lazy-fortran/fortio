@@ -40,6 +40,10 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
         "rank5",
         data=np.arange(1, 9, dtype=np.float64).reshape(2, 1, 2, 1, 2),
     )
+    complex_values = np.zeros(3, dtype=[("real", "<f8"), ("imag", "<f8")])
+    complex_values["real"] = [1.0, -2.0, 3.5]
+    complex_values["imag"] = [4.0, 5.25, -6.0]
+    real_ranks.create_dataset("complex_vector", data=complex_values)
     continued = handle.create_group("continued")
     for index in range(5):
         continued.create_dataset(f"value_{index}", data=np.int32(index + 10))

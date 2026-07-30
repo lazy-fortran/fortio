@@ -12,6 +12,7 @@ program test_hdf5_tools_read
     real(real64) :: x(3), matrix(3, 2)
     real(real64) :: real_cube(3, 2, 2)
     real(real64) :: rank4(3, 2, 1, 2), rank5(2, 1, 2, 1, 2)
+    complex(real64) :: complex_vector(3)
     logical :: object_exists
 
     call get_command_argument(1, fixture)
@@ -33,6 +34,7 @@ program test_hdf5_tools_read
     call h5_get(file_id, "real_ranks/rank4", rank4)
     call h5_get(file_id, "real_ranks/rank5", rank5)
     call h5_get(file_id, "real_ranks/real_cube", real_cube)
+    call h5_get(file_id, "real_ranks/complex_vector", complex_vector)
     call h5_get(file_id, "continued/value_0", continued_value)
     if (continued_value /= 10) error stop "first continued link differs from oracle"
     call h5_get(file_id, "continued/value_4", continued_value)
@@ -73,4 +75,8 @@ program test_hdf5_tools_read
     if (any(abs(rank5 - reshape([(real(scalar, real64), scalar=1, 8)], &
                                 shape(rank5))) > 1.0e-12_real64)) &
         error stop "hdf5_tools rank-5 real differs from oracle"
+    if (any(abs(complex_vector - [cmplx(1.0, 4.0, real64), &
+                                  cmplx(-2.0, 5.25, real64), &
+                                  cmplx(3.5, -6.0, real64)]) > 1.0e-12_real64)) &
+        error stop "hdf5_tools complex vector differs from h5py oracle"
 end program test_hdf5_tools_read

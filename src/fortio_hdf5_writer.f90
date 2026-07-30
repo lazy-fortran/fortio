@@ -10,6 +10,7 @@ module fortio_hdf5_writer
     integer, parameter :: TYPE_I32 = 1
     integer, parameter :: TYPE_R64 = 2
     integer, parameter :: TYPE_TEXT = 3
+    integer, parameter :: TYPE_C64 = 4
     integer(int64), parameter :: ROOT_ADDRESS = 48_int64
 
     type :: hdf5_output_attribute_t
@@ -28,6 +29,7 @@ module fortio_hdf5_writer
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
         character(len=:), allocatable :: value_text
+        complex(real64), allocatable :: values_c64(:)
         type(hdf5_output_attribute_t), allocatable :: attributes(:)
         integer(int64) :: object_address = 0_int64
         integer(int64) :: data_address = 0_int64
@@ -59,6 +61,9 @@ module fortio_hdf5_writer
         procedure :: add_r64_4 => hdf5_add_r64_4
         procedure :: add_r64_5 => hdf5_add_r64_5
         procedure :: add_text_scalar => hdf5_add_text_scalar
+        procedure :: add_c64_1 => hdf5_add_c64_1
+        procedure :: add_c64_2 => hdf5_add_c64_2
+        procedure :: add_c64_3 => hdf5_add_c64_3
         procedure :: add_text_attribute => hdf5_add_text_attribute
         procedure :: add_i32_attribute => hdf5_add_i32_attribute
         procedure :: add_r64_attribute => hdf5_add_r64_attribute
@@ -215,6 +220,56 @@ contains
         call add_r64_flat(this, name, int(shape(values), int64), &
                           reshape(values, [size(values)]), status)
     end subroutine hdf5_add_r64_5
+
+    subroutine hdf5_add_c64_1(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        complex(real64), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_c64_flat(this, name, [int(size(values), int64)], values, status)
+    end subroutine hdf5_add_c64_1
+
+    subroutine hdf5_add_c64_2(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        complex(real64), intent(in) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_c64_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_c64_2
+
+    subroutine hdf5_add_c64_3(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        complex(real64), intent(in) :: values(:, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_c64_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_c64_3
+
+    subroutine add_c64_flat(this, name, dimensions, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        integer(int64), intent(in) :: dimensions(:)
+        complex(real64), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_dataset_t) :: dataset
+        character(len=:), allocatable :: leaf_name
+        integer :: parent_group
+
+        if (.not. prepare_dataset(this, name, dimensions, size(values, kind=int64), &
+                                  parent_group, leaf_name, status)) return
+        dataset%name = leaf_name
+        dataset%parent_group = parent_group
+        dataset%type_code = TYPE_C64
+        dataset%dimensions = dimensions
+        dataset%values_c64 = values
+        allocate(dataset%attributes(0))
+        call append_dataset(this%datasets, dataset)
+    end subroutine add_c64_flat
 
     subroutine add_i32_flat(this, name, dimensions, values, status)
         class(hdf5_writer_t), intent(inout) :: this
@@ -606,6 +661,14 @@ contains
                                          status)
                     if (.not. status%ok()) return
                 end do
+            case (TYPE_C64)
+                do j = 1, size(this%datasets(i)%values_c64)
+                    call writer%write_le_r64(real(this%datasets(i)%values_c64(j), real64), &
+                                             status)
+                    if (.not. status%ok()) return
+                    call writer%write_le_r64(aimag(this%datasets(i)%values_c64(j)), status)
+                    if (.not. status%ok()) return
+                end do
             end select
         end do
         call writer%close(status)
@@ -653,6 +716,8 @@ contains
             datatype_size = 20
         case (TYPE_TEXT)
             datatype_size = 8
+        case (TYPE_C64)
+            datatype_size = 128
         end select
         total = 4 + (4 + 8*size(dataset%dimensions)) + 4 + datatype_size + 4 + 18
         do i = 1, size(dataset%attributes)
@@ -692,6 +757,8 @@ contains
             total = 4_int64*size(dataset%values_i32, kind=int64)
         else if (dataset%type_code == TYPE_R64) then
             total = 8_int64*size(dataset%values_r64, kind=int64)
+        else if (dataset%type_code == TYPE_C64) then
+            total = 16_int64*size(dataset%values_c64, kind=int64)
         else
             total = len(dataset%value_text)
         end if
@@ -797,9 +864,30 @@ contains
                 0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
                 int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
                 0_int8, 0_int8])
-        else
+        else if (dataset%type_code == TYPE_TEXT) then
             call append_values(payload, [int(z'13', int8), 0_int8, 0_int8, 0_int8])
             call append_le32(payload, int(len(dataset%value_text), int32))
+        else
+            call append_values(payload, [int(z'16', int8), 2_int8, 0_int8, 0_int8])
+            call append_le32(payload, 16_int32)
+            call append_text(payload, "real")
+            call append_values(payload, [0_int8, 0_int8, 0_int8, 0_int8])
+            call append_le32(payload, 0_int32)
+            call append_values(payload, [(0_int8, i=1, 28)])
+            call append_values(payload, [int(z'11', int8), int(z'20', int8), &
+                int(z'3f', int8), 0_int8, 8_int8, 0_int8, 0_int8, 0_int8, &
+                0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
+                int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
+                0_int8, 0_int8])
+            call append_text(payload, "imag")
+            call append_values(payload, [0_int8, 0_int8, 0_int8, 0_int8])
+            call append_le32(payload, 8_int32)
+            call append_values(payload, [(0_int8, i=1, 28)])
+            call append_values(payload, [int(z'11', int8), int(z'20', int8), &
+                int(z'3f', int8), 0_int8, 8_int8, 0_int8, 0_int8, 0_int8, &
+                0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
+                int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
+                0_int8, 0_int8])
         end if
         call append_message(chunk, 3, 1, payload)
         deallocate(payload)
