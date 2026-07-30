@@ -43,6 +43,9 @@ program test_hdf5_tools_write
     call h5_close_group(group_id)
     call h5_close(file_id)
     if (h5_isvalid(file_id)) error stop "closed HDF5 identifier remains valid"
+    call h5_create(trim(path)//".second", file_id)
+    call h5_add(file_id, "second_write", 1)
+    call h5_close(file_id)
 
     call h5_open(trim(path), file_id)
     call h5_get(file_id, "answer", scalar)
@@ -103,5 +106,9 @@ program test_hdf5_tools_write
     if (.not. found_accuracy_value) error stop "system h5dump found wrong accuracy value"
     if (.not. found_string) error stop "system h5dump found wrong string value"
     if (.not. found_complex) error stop "system h5dump rejected complex compound type"
+
+    command = "h5dump "//trim(path)//".second > /dev/null"
+    call execute_command_line(trim(command), exitstat=exit_status)
+    if (exit_status /= 0) error stop "system h5dump rejected reused writer output"
 
 end program test_hdf5_tools_write

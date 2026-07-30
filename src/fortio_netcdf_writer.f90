@@ -73,6 +73,9 @@ contains
 
         call status%clear()
         this%path = path
+        if (allocated(this%dimensions)) deallocate(this%dimensions)
+        if (allocated(this%variables)) deallocate(this%variables)
+        if (allocated(this%global_attributes)) deallocate(this%global_attributes)
         allocate(this%dimensions(0), this%variables(0), this%global_attributes(0))
         this%defining = .true.
         this%opened = .true.

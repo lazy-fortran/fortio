@@ -24,6 +24,11 @@ target_include_directories(fortio PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/modules>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+    # fortio uses standard allocatable assignment internally. Some consumers,
+    # including libneo, disable that language behavior project-wide.
+    target_compile_options(fortio PRIVATE -frealloc-lhs)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -70,6 +75,9 @@ if(BUILD_TESTING)
     add_test(NAME netcdf_control COMMAND test_netcdf_control)
     add_test(NAME netcdf_control_oracle COMMAND ncdump -v after_redef control.nc)
     set_tests_properties(netcdf_control_oracle PROPERTIES DEPENDS netcdf_control)
+    add_test(NAME netcdf_control_reuse_oracle
+        COMMAND ncdump -h control-second.nc)
+    set_tests_properties(netcdf_control_reuse_oracle PROPERTIES DEPENDS netcdf_control)
 
     add_executable(test_classic_write_oracle test/test_classic_write_oracle.f90)
     target_link_libraries(test_classic_write_oracle PRIVATE fortio)

@@ -29,4 +29,11 @@ program test_netcdf_control
 
     status = nf90_close(ncid)
     if (status /= NF90_NOERR) error stop "close failed"
+
+    status = nf90_create("control-second.nc", NF90_CLOBBER, ncid)
+    if (status /= NF90_NOERR) error stop "second create failed"
+    status = nf90_def_var(ncid, "second_write", NF90_INT, varid=varid)
+    if (status /= NF90_NOERR) error stop "second definition failed"
+    status = nf90_close(ncid)
+    if (status /= NF90_NOERR) error stop "second close failed"
 end program test_netcdf_control
