@@ -74,6 +74,7 @@ module fortio_hdf5_writer
         procedure :: add_i32_attribute => hdf5_add_i32_attribute
         procedure :: add_r64_attribute => hdf5_add_r64_attribute
         procedure :: remove_dataset => hdf5_remove_dataset
+        procedure :: object_exists => hdf5_object_exists
         procedure :: close => hdf5_writer_close
     end type hdf5_writer_t
 
@@ -429,6 +430,35 @@ contains
         if (dataset_id < count) temporary(dataset_id:) = this%datasets(dataset_id + 1:)
         call move_alloc(temporary, this%datasets)
     end subroutine hdf5_remove_dataset
+
+    logical function hdf5_object_exists(this, path) result(exists)
+        class(hdf5_writer_t), intent(in) :: this
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: normalized, dataset_path
+        integer :: i
+
+        normalized = normalized_path(path)
+        exists = len(normalized) == 0
+        if (exists) return
+        do i = 2, size(this%groups)
+            if (this%groups(i)%path == normalized) then
+                exists = .true.
+                return
+            end if
+        end do
+        do i = 1, size(this%datasets)
+            if (this%datasets(i)%parent_group == 1) then
+                dataset_path = this%datasets(i)%name
+            else
+                dataset_path = trim(this%groups(this%datasets(i)%parent_group)%path)//"/"// &
+                    this%datasets(i)%name
+            end if
+            if (dataset_path == normalized) then
+                exists = .true.
+                return
+            end if
+        end do
+    end function hdf5_object_exists
 
     subroutine find_dataset(this, name, dataset_id, status)
         class(hdf5_writer_t), intent(in) :: this
