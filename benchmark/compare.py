@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare fortio with system NetCDF on the supported dense-array workload."""
+"""Compare Fortio with a system library on one supported I/O workload."""
 
 import argparse
 import re

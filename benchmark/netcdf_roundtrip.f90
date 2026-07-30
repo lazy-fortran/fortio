@@ -5,7 +5,7 @@ program netcdf_roundtrip
         NF90_NOWRITE, nf90_inq_varid
     implicit none
 
-    integer, parameter :: nx = 2048, ny = 2048, repetitions = 5
+    integer, parameter :: nx = 2048, ny = 2048, repetitions = 20
     character(len=512) :: path
     integer :: ncid, x_dim, y_dim, variable, status, repetition
     integer(int64) :: tick_begin, tick_end, tick_rate

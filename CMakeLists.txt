@@ -60,6 +60,13 @@ if(FORTIO_BUILD_BENCHMARKS)
     add_executable(benchmark_native_hdf5 benchmark/hdf5_roundtrip_native.f90)
     target_include_directories(benchmark_native_hdf5 PRIVATE ${HDF5_Fortran_INCLUDE_DIRS})
     target_link_libraries(benchmark_native_hdf5 PRIVATE ${HDF5_Fortran_LIBRARIES})
+
+    add_executable(benchmark_fortio_hdf5_append benchmark/hdf5_append_fortio.f90)
+    target_link_libraries(benchmark_fortio_hdf5_append PRIVATE fortio)
+
+    add_executable(benchmark_native_hdf5_append benchmark/hdf5_append_native.f90)
+    target_include_directories(benchmark_native_hdf5_append PRIVATE ${HDF5_Fortran_INCLUDE_DIRS})
+    target_link_libraries(benchmark_native_hdf5_append PRIVATE ${HDF5_Fortran_LIBRARIES})
 endif()
 
 include(CTest)
