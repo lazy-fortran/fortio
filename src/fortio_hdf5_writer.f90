@@ -13,6 +13,7 @@ module fortio_hdf5_writer
 
     type :: hdf5_output_dataset_t
         character(len=:), allocatable :: name
+        integer :: parent_group = 1
         integer :: type_code = 0
         integer(int64), allocatable :: dimensions(:)
         integer(int32), allocatable :: values_i32(:)
@@ -21,12 +22,21 @@ module fortio_hdf5_writer
         integer(int64) :: data_address = 0_int64
     end type hdf5_output_dataset_t
 
+    type :: hdf5_output_group_t
+        character(len=:), allocatable :: path
+        character(len=:), allocatable :: name
+        integer :: parent_group = 0
+        integer(int64) :: object_address = 0_int64
+    end type hdf5_output_group_t
+
     type, public :: hdf5_writer_t
         character(len=:), allocatable :: path
+        type(hdf5_output_group_t), allocatable :: groups(:)
         type(hdf5_output_dataset_t), allocatable :: datasets(:)
         logical :: opened = .false.
     contains
         procedure :: create => hdf5_writer_create
+        procedure :: define_group => hdf5_define_group
         procedure :: add_i32_scalar => hdf5_add_i32_scalar
         procedure :: add_i32_1 => hdf5_add_i32_1
         procedure :: add_r64_scalar => hdf5_add_r64_scalar
@@ -45,7 +55,11 @@ contains
 
         call status%clear()
         this%path = trim(path)
-        allocate(this%datasets(0))
+        allocate(this%datasets(0), this%groups(1))
+        this%groups(1)%path = ""
+        this%groups(1)%name = ""
+        this%groups(1)%parent_group = 0
+        this%groups(1)%object_address = ROOT_ADDRESS
         this%opened = .true.
     end subroutine hdf5_writer_create
 
@@ -57,6 +71,20 @@ contains
 
         call add_i32_flat(this, name, [integer(int64) ::], [value], status)
     end subroutine hdf5_add_i32_scalar
+
+    subroutine hdf5_define_group(this, path, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+        integer :: group_id
+
+        call status%clear()
+        if (.not. this%opened) then
+            call status%set(FORTIO_ESTATE, "HDF5 writer is not open")
+            return
+        end if
+        call ensure_group_path(this, path, group_id, status)
+    end subroutine hdf5_define_group
 
     subroutine hdf5_add_i32_1(this, name, values, status)
         class(hdf5_writer_t), intent(inout) :: this
@@ -112,10 +140,14 @@ contains
         integer(int32), intent(in) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_output_dataset_t) :: dataset
+        character(len=:), allocatable :: leaf_name
+        integer :: parent_group
 
-        if (.not. prepare_dataset(this, name, dimensions, size(values, kind=int64), status)) &
+        if (.not. prepare_dataset(this, name, dimensions, size(values, kind=int64), &
+                                  parent_group, leaf_name, status)) &
             return
-        dataset%name = trim(name)
+        dataset%name = leaf_name
+        dataset%parent_group = parent_group
         dataset%type_code = TYPE_I32
         dataset%dimensions = dimensions
         dataset%values_i32 = values
@@ -129,22 +161,30 @@ contains
         real(real64), intent(in) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_output_dataset_t) :: dataset
+        character(len=:), allocatable :: leaf_name
+        integer :: parent_group
 
-        if (.not. prepare_dataset(this, name, dimensions, size(values, kind=int64), status)) &
+        if (.not. prepare_dataset(this, name, dimensions, size(values, kind=int64), &
+                                  parent_group, leaf_name, status)) &
             return
-        dataset%name = trim(name)
+        dataset%name = leaf_name
+        dataset%parent_group = parent_group
         dataset%type_code = TYPE_R64
         dataset%dimensions = dimensions
         dataset%values_r64 = values
         call append_dataset(this%datasets, dataset)
     end subroutine add_r64_flat
 
-    logical function prepare_dataset(this, name, dimensions, count, status)
-        class(hdf5_writer_t), intent(in) :: this
+    logical function prepare_dataset(this, name, dimensions, count, parent_group, &
+                                     leaf_name, status)
+        class(hdf5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: name
         integer(int64), intent(in) :: dimensions(:), count
+        integer, intent(out) :: parent_group
+        character(len=:), allocatable, intent(out) :: leaf_name
         type(fortio_status_t), intent(inout) :: status
-        integer :: i
+        character(len=:), allocatable :: normalized, parent_path
+        integer :: i, separator
 
         call status%clear()
         prepare_dataset = this%opened
@@ -152,8 +192,22 @@ contains
             call status%set(FORTIO_ESTATE, "HDF5 writer is not open")
             return
         end if
-        if (len_trim(name) == 0 .or. len_trim(name) > 255 .or. index(name, "/") > 0) then
-            call status%set(FORTIO_ENOTSUP, "root dataset name is not supported")
+        normalized = normalized_path(name)
+        separator = scan(normalized, "/", back=.true.)
+        if (separator == 0) then
+            parent_path = ""
+            leaf_name = normalized
+        else
+            parent_path = normalized(:separator - 1)
+            leaf_name = normalized(separator + 1:)
+        end if
+        if (len(leaf_name) == 0 .or. len(leaf_name) > 255) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 dataset name is not supported")
+            prepare_dataset = .false.
+            return
+        end if
+        call ensure_group_path(this, parent_path, parent_group, status)
+        if (.not. status%ok()) then
             prepare_dataset = .false.
             return
         end if
@@ -163,7 +217,8 @@ contains
             return
         end if
         do i = 1, size(this%datasets)
-            if (this%datasets(i)%name == trim(name)) then
+            if (this%datasets(i)%parent_group == parent_group .and. &
+                this%datasets(i)%name == leaf_name) then
                 call status%set(FORTIO_ESTATE, "duplicate HDF5 dataset name")
                 prepare_dataset = .false.
                 return
@@ -184,6 +239,106 @@ contains
         call move_alloc(temporary, datasets)
     end subroutine append_dataset
 
+    subroutine ensure_group_path(this, path, group_id, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        integer, intent(out) :: group_id
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_group_t) :: group
+        character(len=:), allocatable :: normalized, component, current_path, remaining
+        integer :: separator, existing
+
+        call status%clear()
+        normalized = normalized_path(path)
+        if (len(normalized) == 0) then
+            group_id = 1
+            return
+        end if
+        remaining = normalized
+        current_path = ""
+        group_id = 1
+        do
+            separator = index(remaining, "/")
+            if (separator == 0) then
+                component = remaining
+                remaining = ""
+            else
+                component = remaining(:separator - 1)
+                remaining = remaining(separator + 1:)
+            end if
+            if (len(component) == 0 .or. len(component) > 255) then
+                call status%set(FORTIO_ENOTSUP, "HDF5 group name is not supported")
+                return
+            end if
+            if (len(current_path) == 0) then
+                current_path = component
+            else
+                current_path = current_path//"/"//component
+            end if
+            existing = group_by_path(this%groups, current_path)
+            if (existing == 0) then
+                group%path = current_path
+                group%name = component
+                group%parent_group = group_id
+                call append_group(this%groups, group)
+                group_id = size(this%groups)
+            else
+                group_id = existing
+            end if
+            if (len(remaining) == 0) exit
+        end do
+    end subroutine ensure_group_path
+
+    subroutine append_group(groups, group)
+        type(hdf5_output_group_t), allocatable, intent(inout) :: groups(:)
+        type(hdf5_output_group_t), intent(in) :: group
+        type(hdf5_output_group_t), allocatable :: temporary(:)
+        integer :: count
+
+        count = size(groups)
+        allocate(temporary(count + 1))
+        temporary(:count) = groups
+        temporary(count + 1) = group
+        call move_alloc(temporary, groups)
+    end subroutine append_group
+
+    integer function group_by_path(groups, path) result(group_id)
+        type(hdf5_output_group_t), intent(in) :: groups(:)
+        character(len=*), intent(in) :: path
+        integer :: i
+
+        group_id = 0
+        do i = 1, size(groups)
+            if (groups(i)%path == path) then
+                group_id = i
+                return
+            end if
+        end do
+    end function group_by_path
+
+    pure function normalized_path(path) result(normalized)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: normalized
+        integer :: first, last
+
+        normalized = trim(adjustl(path))
+        first = 1
+        last = len(normalized)
+        do while (first <= last)
+            if (normalized(first:first) /= "/") exit
+            first = first + 1
+        end do
+        do while (last >= first)
+            if (normalized(last:last) /= "/") exit
+            last = last - 1
+        end do
+        if (first > last) then
+            normalized = ""
+        else
+            normalized = normalized(first:last)
+        end if
+    end function normalized_path
+
     subroutine hdf5_writer_close(this, status)
         class(hdf5_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
@@ -194,7 +349,11 @@ contains
 
         call status%clear()
         if (.not. this%opened) return
-        next_address = ROOT_ADDRESS + root_header_size(this%datasets)
+        next_address = ROOT_ADDRESS + group_header_size(1, this%groups, this%datasets)
+        do i = 2, size(this%groups)
+            this%groups(i)%object_address = next_address
+            next_address = next_address + group_header_size(i, this%groups, this%datasets)
+        end do
         do i = 1, size(this%datasets)
             this%datasets(i)%object_address = next_address
             next_address = next_address + dataset_header_size(this%datasets(i))
@@ -210,9 +369,14 @@ contains
         metadata = make_superblock(eof_address)
         call writer%write_bytes(metadata, status)
         if (.not. status%ok()) return
-        metadata = make_root_header(this%datasets)
+        metadata = make_group_header(1, this%groups, this%datasets)
         call writer%write_bytes(metadata, status)
         if (.not. status%ok()) return
+        do i = 2, size(this%groups)
+            metadata = make_group_header(i, this%groups, this%datasets)
+            call writer%write_bytes(metadata, status)
+            if (.not. status%ok()) return
+        end do
         do i = 1, size(this%datasets)
             metadata = make_dataset_header(this%datasets(i))
             call writer%write_bytes(metadata, status)
@@ -236,18 +400,25 @@ contains
         this%opened = .false.
     end subroutine hdf5_writer_close
 
-    integer(int64) function root_header_size(datasets) result(total)
+    integer(int64) function group_header_size(group_id, groups, datasets) result(total)
+        integer, intent(in) :: group_id
+        type(hdf5_output_group_t), intent(in) :: groups(:)
         type(hdf5_output_dataset_t), intent(in) :: datasets(:)
         integer(int64) :: chunk_size
         integer :: i, width
 
         chunk_size = 28_int64
+        do i = 2, size(groups)
+            if (groups(i)%parent_group == group_id) &
+                chunk_size = chunk_size + 15 + len(groups(i)%name)
+        end do
         do i = 1, size(datasets)
-            chunk_size = chunk_size + 15 + len(datasets(i)%name)
+            if (datasets(i)%parent_group == group_id) &
+                chunk_size = chunk_size + 15 + len(datasets(i)%name)
         end do
         width = merge(1, 2, chunk_size <= 255)
         total = 6 + width + chunk_size + 4
-    end function root_header_size
+    end function group_header_size
 
     integer(int64) function dataset_header_size(dataset) result(total)
         type(hdf5_output_dataset_t), intent(in) :: dataset
@@ -294,7 +465,9 @@ contains
         call append_checksum(bytes)
     end function make_superblock
 
-    function make_root_header(datasets) result(bytes)
+    function make_group_header(group_id, groups, datasets) result(bytes)
+        integer, intent(in) :: group_id
+        type(hdf5_output_group_t), intent(in) :: groups(:)
         type(hdf5_output_dataset_t), intent(in) :: datasets(:)
         integer(int8), allocatable :: bytes(:), chunk(:), payload(:)
         integer(int64) :: chunk_size
@@ -312,7 +485,19 @@ contains
         call append_u8(payload, 0)
         call append_u8(payload, 0)
         call append_message(chunk, 10, 1, payload)
+        do i = 2, size(groups)
+            if (groups(i)%parent_group /= group_id) cycle
+            deallocate(payload)
+            allocate(payload(0))
+            call append_u8(payload, 1)
+            call append_u8(payload, 0)
+            call append_u8(payload, len(groups(i)%name))
+            call append_text(payload, groups(i)%name)
+            call append_le64(payload, groups(i)%object_address)
+            call append_message(chunk, 6, 0, payload)
+        end do
         do i = 1, size(datasets)
+            if (datasets(i)%parent_group /= group_id) cycle
             deallocate(payload)
             allocate(payload(0))
             call append_u8(payload, 1)
@@ -332,7 +517,7 @@ contains
         call append_unsigned(bytes, chunk_size, width)
         call append_values(bytes, chunk)
         call append_checksum(bytes)
-    end function make_root_header
+    end function make_group_header
 
     function make_dataset_header(dataset) result(bytes)
         type(hdf5_output_dataset_t), intent(in) :: dataset
