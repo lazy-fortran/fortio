@@ -3,6 +3,7 @@ module hdf5_tools
     use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP
+    use fortio_posix, only: handle_table_lock, handle_table_unlock
     implicit none
     private
 
@@ -623,9 +624,11 @@ contains
         real(real64), contiguous, target, intent(out) :: value(:, :)
         type(fortio_status_t) :: status
         integer :: slot
+        character(len=2048) :: path
 
         slot = require_mode(h5id, MODE_READ)
-        call files(root_slot(slot))%read_into_r64_2(joined_path(slot, dataset), value, status)
+        call joined_path_into(slot, dataset, path)
+        call files(root_slot(slot))%read_into_r64_2(trim(path), value, status)
         call require_ok(status)
     end subroutine h5_get_double_2
 
@@ -1302,9 +1305,14 @@ contains
     end subroutine h5_add_double_5
 
     integer function allocate_handle() result(slot)
+        call handle_table_lock()
         slot = first_free_slot()
-        if (slot == 0) error stop "fortio hdf5_tools open-handle table is full"
+        if (slot == 0) then
+            call handle_table_unlock()
+            error stop "fortio hdf5_tools open-handle table is full"
+        end if
         in_use(slot) = .true.
+        call handle_table_unlock()
     end function allocate_handle
 
     integer function first_free_slot() result(slot)
@@ -1334,10 +1342,12 @@ contains
     subroutine set_root_handle(slot, mode)
         integer, intent(in) :: slot, mode
 
+        call handle_table_lock()
         handle_mode(slot) = mode
         root_slot(slot) = slot
         root_handle(slot) = .true.
         handle_prefix(slot) = ""
+        call handle_table_unlock()
     end subroutine set_root_handle
 
     subroutine set_group_handle(slot, root, mode, prefix)
@@ -1345,6 +1355,7 @@ contains
         character(len=*), intent(in) :: prefix
         character(len=:), allocatable :: clean_prefix
 
+        call handle_table_lock()
         clean_prefix = trim(adjustl(prefix))
         do while (len(clean_prefix) > 0)
             if (clean_prefix(1:1) /= "/") exit
@@ -1359,6 +1370,7 @@ contains
         root_slot(slot) = root
         root_handle(slot) = .false.
         handle_prefix(slot) = clean_prefix
+        call handle_table_unlock()
     end subroutine set_group_handle
 
     subroutine close_root(slot)
@@ -1407,11 +1419,13 @@ contains
         integer, intent(in) :: root
         integer :: slot
 
+        call handle_table_lock()
         do slot = 1, MAX_OPEN_FILES
             if (in_use(slot)) then
                 if (root_slot(slot) == root) call clear_handle(slot)
             end if
         end do
+        call handle_table_unlock()
     end subroutine invalidate_root
 
     subroutine clear_all_handles()
@@ -1425,6 +1439,7 @@ contains
     subroutine clear_handle(slot)
         integer, intent(in) :: slot
 
+        call handle_table_lock()
         in_use(slot) = .false.
         handle_mode(slot) = 0
         root_slot(slot) = 0
@@ -1440,6 +1455,7 @@ contains
             deallocate(unlimited_buffers(slot)%values_r64)
         if (allocated(unlimited_buffers(slot)%matrix_r64)) &
             deallocate(unlimited_buffers(slot)%matrix_r64)
+        call handle_table_unlock()
     end subroutine clear_handle
 
     function joined_path(slot, name) result(path)
@@ -1461,6 +1477,28 @@ contains
             path = trim(handle_prefix(slot))//"/"//clean_name
         end if
     end function joined_path
+
+    subroutine joined_path_into(slot, name, path)
+        integer, intent(in) :: slot
+        character(len=*), intent(in) :: name
+        character(len=*), intent(out) :: path
+        character(len=len(path)) :: clean_name
+        integer :: first
+
+        clean_name = trim(adjustl(name))
+        first = 1
+        do while (first <= len_trim(clean_name))
+            if (clean_name(first:first) /= "/") exit
+            first = first + 1
+        end do
+        if (len_trim(handle_prefix(slot)) == 0) then
+            path = clean_name(first:)
+        else if (first > len_trim(clean_name)) then
+            path = trim(handle_prefix(slot))
+        else
+            path = trim(handle_prefix(slot))//"/"//clean_name(first:)
+        end if
+    end subroutine joined_path_into
 
     function append_path(prefix, name) result(path)
         character(len=*), intent(in) :: prefix, name

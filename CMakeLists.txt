@@ -21,6 +21,7 @@ add_library(fortio
     src/netcdf.f90
 )
 add_library(fortio::fortio ALIAS fortio)
+target_link_libraries(fortio PUBLIC pthread)
 set_target_properties(fortio PROPERTIES
     Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/modules"
 )
@@ -62,6 +63,7 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(OpenMP REQUIRED COMPONENTS Fortran)
     add_executable(test_checksum test/test_checksum.f90)
     target_link_libraries(test_checksum PRIVATE fortio)
     add_test(NAME checksum COMMAND test_checksum)
@@ -145,6 +147,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_hdf5_tools_write PRIVATE fortio)
     add_test(NAME hdf5_tools_write COMMAND test_hdf5_tools_write
         "${CMAKE_CURRENT_BINARY_DIR}/hdf5-tools-written.h5")
+
+    add_executable(test_thread_safety test/test_thread_safety.f90)
+    target_link_libraries(test_thread_safety PRIVATE fortio OpenMP::OpenMP_Fortran)
+    add_test(NAME thread_safety COMMAND test_thread_safety
+        "${CMAKE_CURRENT_BINARY_DIR}/thread-oracle.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py"
+        "${CMAKE_CURRENT_BINARY_DIR}/thread-oracle.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets
