@@ -1108,7 +1108,7 @@ contains
         end do
     end subroutine parse_message_chunk
 
-    subroutine parse_continuation(this, address, length, links, dataset, want_links, &
+    recursive subroutine parse_continuation(this, address, length, links, dataset, want_links, &
             header_flags, status)
         class(hdf5_file_t), intent(inout) :: this
         integer(int64), intent(in) :: address, length
