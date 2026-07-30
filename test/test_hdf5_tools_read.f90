@@ -2,6 +2,7 @@ program test_hdf5_tools_read
     use, intrinsic :: iso_fortran_env, only: real64
     use hdf5_tools, only: HID_T, HSIZE_T, SIZE_T, h5_init, h5_deinit, h5_open, &
         h5_close, h5_get, h5_get_bounds, h5_exists, h5_obj_exists
+    use h5lt, only: h5ltget_dataset_info_f
     implicit none
 
     integer(HID_T) :: file_id
@@ -9,7 +10,8 @@ program test_hdf5_tools_read
     integer(SIZE_T) :: element_count
     character(len=1024) :: fixture, generator, command
     character(len=32) :: label
-    integer :: scalar, continued_value, command_status, lb1, lb2, ub1, ub2
+    integer :: scalar, continued_value, command_status, hdferr, lb1, lb2, &
+        type_class, ub1, ub2
     integer :: int_matrix(3, 2), int_cube(3, 2, 2)
     real(real64) :: x(3), matrix(3, 2)
     real(real64) :: real_cube(3, 2, 2)
@@ -30,8 +32,9 @@ program test_hdf5_tools_read
     call h5_get(file_id, "grid/Nt", scalar)
     call h5_get(file_id, "grid/x_values", x)
     call h5_get(file_id, "grid/matrix", matrix)
-    dimensions = shape(matrix, kind=HSIZE_T)
-    element_count = int(product(dimensions), SIZE_T)
+    call h5ltget_dataset_info_f(file_id, "grid/matrix", dimensions, type_class, &
+        element_count, hdferr)
+    if (hdferr /= 0) error stop "HDF5 dataset-info query failed"
     call h5_get(file_id, "grid/label", label)
     call h5_get(file_id, "integer_ranks/int_matrix", int_matrix)
     call h5_get(file_id, "integer_ranks/int_cube", int_cube)
@@ -65,7 +68,10 @@ program test_hdf5_tools_read
         error stop "hdf5_tools vector differs from oracle"
     if (any(abs(matrix - reshape([1, 2, 3, 4, 5, 6], [3, 2])) > 1.0e-12_real64)) &
         error stop "hdf5_tools matrix differs from oracle"
-    if (element_count /= 6_SIZE_T) error stop "HDF5 size kinds differ from oracle"
+    if (any(dimensions /= [3_HSIZE_T, 2_HSIZE_T])) &
+        error stop "HDF5 dataset dimensions differ from oracle"
+    if (type_class /= 1) error stop "HDF5 dataset class differs from oracle"
+    if (element_count /= 8_SIZE_T) error stop "HDF5 element size differs from oracle"
     if (trim(label) /= "stellarator") error stop "hdf5_tools string differs from oracle"
     if (any(int_matrix /= reshape([(scalar, scalar=1, 6)], shape(int_matrix)))) &
         error stop "hdf5_tools integer matrix differs from oracle"

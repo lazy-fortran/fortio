@@ -90,9 +90,35 @@ module hdf5_tools
     public :: h5_add_int, h5_add_double_0, h5_add_double_1, h5_add_string
     public :: h5_add_float_1
     public :: h5_add_complex_1, h5_get_double_1, h5_get_bounds_1
+    public :: h5_get_dataset_info
     public :: h5_copy
 
 contains
+
+    subroutine h5_get_dataset_info(h5id, dataset, dimensions, type_class, &
+            type_size, hdferr)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(HSIZE_T), intent(out) :: dimensions(:)
+        integer, intent(out) :: type_class
+        integer(SIZE_T), intent(out) :: type_size
+        integer, intent(out) :: hdferr
+        type(fortio_status_t) :: status
+        integer(int64), allocatable :: file_dimensions(:)
+        logical :: is_group
+        integer :: element_size, slot
+
+        hdferr = -1
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%describe(joined_path(slot, dataset), is_group, &
+            type_class, file_dimensions, status, element_size)
+        if (.not. status%ok()) return
+        if (is_group) return
+        if (size(file_dimensions) /= size(dimensions)) return
+        dimensions = int(file_dimensions(size(file_dimensions):1:-1), HSIZE_T)
+        type_size = int(element_size, SIZE_T)
+        hdferr = 0
+    end subroutine h5_get_dataset_info
 
     subroutine h5_init()
     end subroutine h5_init
