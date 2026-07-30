@@ -5,7 +5,7 @@ module netcdf
                                     NC_INT, NC_FLOAT, NC_DOUBLE
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
-                            FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE
+                            FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST
     implicit none
     private
 
@@ -16,6 +16,7 @@ module netcdf
     integer, parameter, public :: NF90_EBADDIM = FORTIO_ENOTFOUND
     integer, parameter, public :: NF90_ENOTSUPPORT = FORTIO_ENOTSUP
     integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
+    integer, parameter, public :: NF90_EEXIST = FORTIO_EEXIST
     integer, parameter, public :: NF90_NOWRITE = 0
     integer, parameter, public :: NF90_WRITE = 1
     integer, parameter, public :: NF90_CLOBBER = 0
@@ -110,11 +111,17 @@ contains
         integer, intent(out) :: ncid
         type(fortio_status_t) :: status
         integer :: slot
+        logical :: exists
 
         ncid = -1
-        if (iand(cmode, NF90_NETCDF4) /= 0) then
-            code = NF90_ENOTSUPPORT
-            last_error = "NetCDF-4 writer is not implemented"
+        if (iand(cmode, NF90_NOCLOBBER) /= 0) then
+            inquire (file=trim(path), exist=exists)
+        else
+            exists = .false.
+        end if
+        if (exists) then
+            code = NF90_EEXIST
+            last_error = "file already exists: "//trim(path)
             return
         end if
         slot = first_free_slot()
@@ -741,6 +748,8 @@ contains
             message = "Variable not found"
         case (NF90_ENOTSUPPORT)
             message = "Operation or format feature is not supported"
+        case (NF90_EEXIST)
+            message = "File already exists"
         case default
             if (len_trim(last_error) > 0) then
                 message = trim(last_error)

@@ -10,6 +10,7 @@ module fortio_status
     integer, parameter, public :: FORTIO_ESHAPE = -5
     integer, parameter, public :: FORTIO_ENOTSUP = -6
     integer, parameter, public :: FORTIO_ESTATE = -7
+    integer, parameter, public :: FORTIO_EEXIST = -8
 
     type, public :: fortio_status_t
         integer :: code = FORTIO_SUCCESS

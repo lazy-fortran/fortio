@@ -2,8 +2,8 @@ program test_classic_write_oracle
     use, intrinsic :: iso_fortran_env, only: int32, real64
     use netcdf, only: nf90_create, nf90_def_dim, nf90_def_var, nf90_enddef, &
                       nf90_put_att, nf90_put_var, nf90_close, NF90_CLOBBER, &
-                      NF90_CHAR, NF90_DOUBLE, NF90_GLOBAL, NF90_INT, NF90_NOERR, &
-                      nf90_inq_varid
+                      NF90_CHAR, NF90_DOUBLE, NF90_EEXIST, NF90_GLOBAL, NF90_INT, &
+                      NF90_NETCDF4, NF90_NOCLOBBER, NF90_NOERR, nf90_inq_varid
     implicit none
 
     integer :: ncid, x_dim, y_dim, string_dim, group_dim
@@ -17,7 +17,7 @@ program test_classic_write_oracle
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/fortio-written.nc"
 
-    status = nf90_create(trim(path), NF90_CLOBBER, ncid)
+    status = nf90_create(trim(path), ior(NF90_CLOBBER, NF90_NETCDF4), ncid)
     if (status /= NF90_NOERR) error stop "create"
     status = nf90_def_dim(ncid, "x", 3, x_dim)
     if (status /= NF90_NOERR) error stop "define x"
@@ -65,6 +65,8 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "put character vector"
     status = nf90_close(ncid)
     if (status /= NF90_NOERR) error stop "close"
+    status = nf90_create(trim(path), ior(NF90_NOCLOBBER, NF90_NETCDF4), ncid)
+    if (status /= NF90_EEXIST) error stop "noclobber did not preserve existing file"
 
     command = "ncdump -v coil_group,mgrid_mode "//trim(path)//" > "//trim(path)//".header"
     call execute_command_line(trim(command), exitstat=command_status)
