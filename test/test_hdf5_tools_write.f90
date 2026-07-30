@@ -45,6 +45,10 @@ program test_hdf5_tools_write
     call h5_add(file_id, "label", "stellarator", "configuration label")
     call h5_add(file_id, "enabled", .true.)
     call h5_add_float_1(file_id, "float_vector", [1.25_real32, 2.5_real32], [1], [2])
+    if (.not. h5_exists(file_id, "float_vector")) &
+        error stop "write-handle dataset existence query failed"
+    if (h5_exists(file_id, "not_created")) &
+        error stop "write-handle existence query found absent object"
     call h5_add(file_id, "long_values", long_values, [1], [2])
     call h5_add(file_id, "deleted", 123)
     call h5_delete(file_id, "deleted")

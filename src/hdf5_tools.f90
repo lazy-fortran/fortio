@@ -757,9 +757,16 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
 
-        slot = require_mode(h5id, MODE_READ)
-        call files(root_slot(slot))%exists(joined_path(slot, name_obj), exists, status)
-        call require_ok(status)
+        if (.not. h5_isvalid(h5id)) error stop "invalid fortio HDF5 identifier"
+        slot = int(h5id)
+        if (handle_mode(slot) == MODE_READ) then
+            call files(root_slot(slot))%exists(joined_path(slot, name_obj), exists, status)
+            call require_ok(status)
+        else if (handle_mode(slot) == MODE_WRITE) then
+            exists = writers(root_slot(slot))%object_exists(joined_path(slot, name_obj))
+        else
+            error stop "fortio HDF5 identifier has wrong mode"
+        end if
     end function h5_exists
 
     subroutine h5_obj_exists(h5id, name_obj, exists)
