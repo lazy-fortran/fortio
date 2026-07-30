@@ -2,11 +2,13 @@ netcdf oracle {
 dimensions:
     x = 3 ;
     y = 2 ;
+    z = 2 ;
 variables:
     int scalar ;
     double x_values(x) ;
         x_values:units = "m" ;
     double matrix(y, x) ;
+    double cube(z, y, x) ;
 
 // global attributes:
     :coordinate_system = "cartesian" ;
@@ -15,5 +17,6 @@ data:
     scalar = 42 ;
     x_values = 1.25, -2.5, 4.75 ;
     matrix = 1, 2, 3, 4, 5, 6 ;
+    cube = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ;
 
 }

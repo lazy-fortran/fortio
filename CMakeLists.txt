@@ -47,6 +47,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/attribute-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
 
+    add_executable(test_netcdf_hyperslab test/test_netcdf_hyperslab.f90)
+    target_link_libraries(test_netcdf_hyperslab PRIVATE fortio)
+    add_test(NAME netcdf_hyperslab COMMAND test_netcdf_hyperslab
+        "${CMAKE_CURRENT_BINARY_DIR}/hyperslab-oracle.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
+
     add_executable(test_classic_write_oracle test/test_classic_write_oracle.f90)
     target_link_libraries(test_classic_write_oracle PRIVATE fortio)
     add_test(NAME classic_write COMMAND test_classic_write_oracle

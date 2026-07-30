@@ -434,24 +434,22 @@ contains
         code = finish_status(status)
     end function get_i32_scalar
 
-    integer function get_i32_rank1(ncid, varid, value) result(code)
+    integer function get_i32_rank1(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         integer(int32), intent(out) :: value(:)
+        integer, intent(in), optional :: start(:), count(:)
         integer(int32), allocatable :: temporary(:)
         type(fortio_status_t) :: status
+        integer :: first(1), last(1)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         call files(ncid)%read_i32_1(files(ncid)%variables(varid)%name, temporary, status)
-        if (status%ok()) then
-            if (size(value) == size(temporary)) then
-                value = temporary
-            else
-                call status%set(NF90_EINVAL, "destination shape does not match variable")
-            end if
-        end if
+        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+                                            first, last, status)
+        if (status%ok()) value = temporary(first(1):last(1))
         code = finish_status(status)
     end function get_i32_rank1
 
@@ -468,66 +466,61 @@ contains
         code = finish_status(status)
     end function get_r64_scalar
 
-    integer function get_r64_rank1(ncid, varid, value) result(code)
+    integer function get_r64_rank1(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:)
+        integer, intent(in), optional :: start(:), count(:)
         real(real64), allocatable :: temporary(:)
         type(fortio_status_t) :: status
+        integer :: first(1), last(1)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
-        if (status%ok()) then
-            if (all(shape(value) == shape(temporary))) then
-                value = temporary
-            else
-                call status%set(NF90_EINVAL, "destination shape does not match variable")
-            end if
-        end if
+        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+                                            first, last, status)
+        if (status%ok()) value = temporary(first(1):last(1))
         code = finish_status(status)
     end function get_r64_rank1
 
-    integer function get_r64_rank2(ncid, varid, value) result(code)
+    integer function get_r64_rank2(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :)
+        integer, intent(in), optional :: start(:), count(:)
         real(real64), allocatable :: temporary(:, :)
         type(fortio_status_t) :: status
+        integer :: first(2), last(2)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
-        if (status%ok()) then
-            if (all(shape(value) == shape(temporary))) then
-                value = temporary
-            else
-                call status%set(NF90_EINVAL, "destination shape does not match variable")
-            end if
-        end if
+        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+                                            first, last, status)
+        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2))
         code = finish_status(status)
     end function get_r64_rank2
 
-    integer function get_r64_rank3(ncid, varid, value) result(code)
+    integer function get_r64_rank3(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :, :)
+        integer, intent(in), optional :: start(:), count(:)
         real(real64), allocatable :: temporary(:, :, :)
         type(fortio_status_t) :: status
+        integer :: first(3), last(3)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
-        if (status%ok()) then
-            if (all(shape(value) == shape(temporary))) then
-                value = temporary
-            else
-                call status%set(NF90_EINVAL, "destination shape does not match variable")
-            end if
-        end if
+        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+                                            first, last, status)
+        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
+                                            first(3):last(3))
         code = finish_status(status)
     end function get_r64_rank3
 
@@ -679,6 +672,52 @@ contains
         if (prepare_get) prepare_get = varid <= size(files(ncid)%variables)
         if (.not. prepare_get) call status%set(NF90_ENOTVAR, "invalid variable ID")
     end function prepare_get
+
+    subroutine resolve_slice(source_shape, destination_shape, start, count, first, last, &
+                             status)
+        integer, intent(in) :: source_shape(:), destination_shape(:)
+        integer, intent(in), optional :: start(:), count(:)
+        integer, intent(out) :: first(:), last(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+
+        call status%clear()
+        if (size(source_shape) /= size(destination_shape)) then
+            call status%set(NF90_EINVAL, "destination rank does not match variable")
+            return
+        end if
+        first = 1
+        if (present(start)) then
+            if (size(start) /= size(source_shape)) then
+                call status%set(NF90_EINVAL, "start rank does not match variable")
+                return
+            end if
+            first = start
+        end if
+        if (present(count)) then
+            if (size(count) /= size(source_shape)) then
+                call status%set(NF90_EINVAL, "count rank does not match variable")
+                return
+            end if
+            if (any(count /= destination_shape)) then
+                call status%set(NF90_EINVAL, "count does not match destination shape")
+                return
+            end if
+        else
+            if (any(destination_shape /= source_shape)) then
+                call status%set(NF90_EINVAL, &
+                                "partial destination requires an explicit count")
+                return
+            end if
+        end if
+        last = first + destination_shape - 1
+        do i = 1, size(first)
+            if (first(i) < 1 .or. last(i) > source_shape(i)) then
+                call status%set(NF90_EINVAL, "requested hyperslab is outside the variable")
+                return
+            end if
+        end do
+    end subroutine resolve_slice
 
     integer function find_attribute(ncid, varid, name, attribute_id) result(code)
         integer, intent(in) :: ncid, varid
