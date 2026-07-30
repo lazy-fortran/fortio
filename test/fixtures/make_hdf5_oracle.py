@@ -4,7 +4,10 @@ import h5py
 import numpy as np
 
 
-with h5py.File(sys.argv[1], "w", libver="latest") as handle:
+with h5py.File(sys.argv[1], "w", libver="latest", track_order=True) as handle:
+    for index in range(8):
+        handle.attrs[f"metadata_{index}"] = np.int32(index)
+    handle.attrs["torflux"] = np.float64(-803450571.635625)
     grid = handle.create_group("grid")
     grid.create_dataset("Nt", data=np.int32(42))
     grid.create_dataset(
