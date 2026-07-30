@@ -1,7 +1,7 @@
 module fortio
-    use, intrinsic :: iso_fortran_env, only: int8, int32, real64
+    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use fortio_bytes, only: byte_reader_t
-    use fortio_hdf5_reader, only: hdf5_file_t
+    use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
     use fortio_netcdf_classic, only: classic_file_t
     use fortio_status
     implicit none
@@ -23,6 +23,7 @@ module fortio
         procedure :: read_i32_1 => file_read_i32_1
         procedure :: read_i32_2 => file_read_i32_2
         procedure :: read_i32_3 => file_read_i32_3
+        procedure :: read_i64_1 => file_read_i64_1
         procedure :: read_r64_scalar => file_read_r64_scalar
         procedure :: read_r64_1 => file_read_r64_1
         procedure :: read_r64_2 => file_read_r64_2
@@ -35,9 +36,12 @@ module fortio
         procedure :: read_i32_attribute => file_read_i32_attribute
         procedure :: read_text_scalar => file_read_text_scalar
         procedure :: exists => file_exists
-        generic :: read => read_i32_scalar, read_i32_1, read_i32_2, read_i32_3, &
-                           read_r64_scalar, read_r64_1, read_r64_2, read_r64_3, &
-                           read_r64_4, read_r64_5, read_c64_1, read_c64_2, read_c64_3
+        procedure :: describe => file_describe
+        procedure :: list_children => file_list_children
+        procedure :: get_attributes => file_get_attributes
+        generic :: read => read_i32_scalar, read_i32_1, read_i32_2, read_i32_3, read_i64_1, &
+            read_r64_scalar, read_r64_1, read_r64_2, read_r64_3, &
+            read_r64_4, read_r64_5, read_c64_1, read_c64_2, read_c64_3
         final :: file_finalize
     end type fortio_file_t
 
@@ -45,8 +49,65 @@ module fortio
     public :: FORTIO_SUCCESS, FORTIO_EIO, FORTIO_EFORMAT, FORTIO_ENOTFOUND
     public :: FORTIO_ETYPE, FORTIO_ESHAPE, FORTIO_ENOTSUP, FORTIO_ESTATE
     public :: FORTIO_EEXIST
+    public :: hdf5_attribute_t
 
 contains
+
+    subroutine file_read_i64_1(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        integer(int64), allocatable, intent(out) :: value(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "64-bit integer data requires HDF5")
+            return
+        end if
+        call this%hdf5%read_i64_1(path, value, status)
+    end subroutine file_read_i64_1
+
+    subroutine file_describe(this, path, is_group, type_class, dimensions, status, element_size)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        logical, intent(out) :: is_group
+        integer, intent(out) :: type_class
+        integer(int64), allocatable, intent(out) :: dimensions(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer, intent(out), optional :: element_size
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "object description requires HDF5")
+            return
+        end if
+        call this%hdf5%describe(path, is_group, type_class, dimensions, status, element_size)
+    end subroutine file_describe
+
+    subroutine file_list_children(this, path, names, group_flags, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable, intent(out) :: names(:)
+        logical, allocatable, intent(out) :: group_flags(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "child listing requires HDF5")
+            return
+        end if
+        call this%hdf5%list_children(path, names, group_flags, status)
+    end subroutine file_list_children
+
+    subroutine file_get_attributes(this, path, attributes, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(hdf5_attribute_t), allocatable, intent(out) :: attributes(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "attribute copying requires HDF5")
+            return
+        end if
+        call this%hdf5%get_attributes(path, attributes, status)
+    end subroutine file_get_attributes
 
     subroutine file_read_c64_1(this, path, value, status)
         class(fortio_file_t), intent(inout) :: this

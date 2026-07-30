@@ -1,14 +1,23 @@
 module hdf5_tools
     use, intrinsic :: iso_fortran_env, only: int32, int64, real64
-    use fortio, only: fortio_file_t, fortio_status_t
+    use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
+    use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP
     implicit none
     private
 
     integer, parameter, public :: HID_T = int64
     integer, parameter, public :: dcp = real64
     integer, parameter :: MAX_OPEN_FILES = 64
-    integer, parameter :: MODE_READ = 1, MODE_WRITE = 2
+    integer, parameter :: MODE_READ = 1, MODE_WRITE = 2, MODE_UNLIMITED = 3
+    integer, parameter :: UNLIMITED_INTEGER = 1, UNLIMITED_DOUBLE = 2
+    type :: unlimited_buffer_t
+        character(len=1024) :: path = ""
+        integer :: type_code = 0
+        integer :: used = 0
+        integer(int32), allocatable :: values_i32(:)
+        real(real64), allocatable :: values_r64(:)
+    end type unlimited_buffer_t
     type(fortio_file_t), save :: files(MAX_OPEN_FILES)
     type(hdf5_writer_t), save :: writers(MAX_OPEN_FILES)
     logical, save :: in_use(MAX_OPEN_FILES) = .false.
@@ -16,12 +25,14 @@ module hdf5_tools
     integer, save :: root_slot(MAX_OPEN_FILES) = 0
     logical, save :: root_handle(MAX_OPEN_FILES) = .false.
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
+    type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
     logical, save, public :: h5overwrite = .false.
 
     interface h5_get
         module procedure h5_get_int
         module procedure h5_get_int_1
         module procedure h5_get_int_2, h5_get_int_3
+        module procedure h5_get_i64_1
         module procedure h5_get_double_0
         module procedure h5_get_double_1
         module procedure h5_get_double_2
@@ -36,6 +47,7 @@ module hdf5_tools
         module procedure h5_add_int_1_bounds, h5_add_int_1_nobounds
         module procedure h5_add_int_2_bounds, h5_add_int_2_nobounds
         module procedure h5_add_int_3_bounds
+        module procedure h5_add_i64_1_bounds, h5_add_i64_1_nobounds
         module procedure h5_add_double_0
         module procedure h5_add_double_1_bounds, h5_add_double_1_nobounds
         module procedure h5_add_double_2, h5_add_double_3
@@ -51,12 +63,18 @@ module hdf5_tools
         module procedure h5_get_bounds_3
     end interface h5_get_bounds
 
+    interface h5_append
+        module procedure h5_append_int, h5_append_double
+    end interface h5_append
+
     public :: h5_init, h5_deinit, h5_open, h5_close, h5_get
     public :: h5_create, h5_open_rw, h5_define_group, h5_open_group, h5_close_group
     public :: h5_add
     public :: h5_get_bounds
     public :: h5_exists, h5_obj_exists
     public :: h5_isvalid, h5_create_parent_groups
+    public :: h5_delete, h5_define_unlimited_array, h5_append
+    public :: h5_copy
 
 contains
 
@@ -103,11 +121,25 @@ contains
         character(len=*), intent(in) :: filename
         integer(HID_T), intent(out) :: h5id
         integer, intent(in), optional :: opt_fileformat_version
+        type(fortio_status_t) :: status
         logical :: exists
+        integer :: slot
 
         inquire(file=trim(filename), exist=exists)
-        if (exists) error stop "fortio h5_open_rw cannot yet modify an existing file"
-        call h5_create(filename, h5id, opt_fileformat_version)
+        if (.not. exists) then
+            call h5_create(filename, h5id, opt_fileformat_version)
+            return
+        end if
+        slot = allocate_handle()
+        call files(slot)%open(trim(filename), status)
+        call require_ok(status)
+        call writers(slot)%create(trim(filename), status)
+        call require_ok(status)
+        call set_root_handle(slot, MODE_WRITE)
+        call copy_object(slot, "", slot, "")
+        call files(slot)%close(status)
+        call require_ok(status)
+        h5id = int(slot, HID_T)
     end subroutine h5_open_rw
 
     subroutine h5_close(h5id)
@@ -148,7 +180,7 @@ contains
         slot = require_id(h5id)
         group_slot = allocate_handle()
         call set_group_handle(group_slot, root_slot(slot), handle_mode(slot), &
-                              joined_path(slot, grpname))
+            joined_path(slot, grpname))
         h5id_grp = int(group_slot, HID_T)
     end subroutine h5_open_group
 
@@ -161,6 +193,256 @@ contains
         call clear_handle(slot)
         h5id_grp = -1_HID_T
     end subroutine h5_close_group
+
+    subroutine h5_delete(h5id, dataset)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_WRITE)
+        call writers(root_slot(slot))%remove_dataset(joined_path(slot, dataset), status)
+        call require_ok(status)
+    end subroutine h5_delete
+
+    subroutine h5_copy(source_id, source_path, destination_id, destination_path)
+        integer(HID_T), intent(in) :: source_id, destination_id
+        character(len=*), intent(in) :: source_path, destination_path
+        integer :: source_slot, destination_slot
+
+        source_slot = require_mode(source_id, MODE_READ)
+        destination_slot = require_mode(destination_id, MODE_WRITE)
+        call copy_object(root_slot(source_slot), joined_path(source_slot, source_path), &
+            root_slot(destination_slot), &
+            joined_path(destination_slot, destination_path))
+    end subroutine h5_copy
+
+    recursive subroutine copy_object(source_root, source_path, destination_root, &
+            destination_path)
+        integer, intent(in) :: source_root, destination_root
+        character(len=*), intent(in) :: source_path, destination_path
+        type(fortio_status_t) :: status
+        character(len=:), allocatable :: names(:)
+        character(len=:), allocatable :: child_source, child_destination
+        logical, allocatable :: group_flags(:)
+        logical :: is_group
+        integer(int64), allocatable :: dimensions(:)
+        integer :: type_class, element_size, i
+
+        call files(source_root)%describe(source_path, is_group, type_class, dimensions, status, &
+            element_size)
+        call require_ok(status)
+        if (.not. is_group) then
+            call copy_dataset(source_root, source_path, destination_root, &
+                destination_path, type_class, element_size, size(dimensions))
+            return
+        end if
+        if (len_trim(destination_path) > 0 .and. trim(destination_path) /= "/") then
+            call writers(destination_root)%define_group(destination_path, status)
+            call require_ok(status)
+        end if
+        call files(source_root)%list_children(source_path, names, group_flags, status)
+        call require_ok(status)
+        do i = 1, size(names)
+            child_source = append_path(source_path, trim(names(i)))
+            child_destination = append_path(destination_path, trim(names(i)))
+            call copy_object(source_root, child_source, destination_root, child_destination)
+        end do
+    end subroutine copy_object
+
+    subroutine copy_dataset(source_root, source_path, destination_root, destination_path, &
+            type_class, element_size, rank)
+        integer, intent(in) :: source_root, destination_root, type_class, element_size, rank
+        character(len=*), intent(in) :: source_path, destination_path
+        type(fortio_status_t) :: status
+        integer(int32) :: i0
+        integer(int32), allocatable :: i1(:), i2(:, :), i3(:, :, :)
+        integer(int64), allocatable :: i64_1(:)
+        real(real64) :: r0
+        real(real64), allocatable :: r1(:), r2(:, :), r3(:, :, :)
+        real(real64), allocatable :: r4(:, :, :, :), r5(:, :, :, :, :)
+        complex(real64), allocatable :: c1(:), c2(:, :), c3(:, :, :)
+        character(len=:), allocatable :: text
+        type(hdf5_attribute_t), allocatable :: attributes(:)
+        integer :: attribute_index
+
+        select case (type_class)
+        case (0)
+            if (element_size == 8 .and. rank == 1) then
+                call files(source_root)%read(source_path, i64_1, status)
+                if (status%ok()) call writers(destination_root)%add_i64_1( &
+                    destination_path, i64_1, status)
+                call require_ok(status)
+                return
+            end if
+            select case (rank)
+            case (0)
+                call files(source_root)%read_i32_scalar(source_path, i0, status)
+                if (status%ok()) call writers(destination_root)%add_i32_scalar( &
+                    destination_path, i0, status)
+            case (1)
+                call files(source_root)%read_i32_1(source_path, i1, status)
+                if (status%ok()) call writers(destination_root)%add_i32_1( &
+                    destination_path, i1, status)
+            case (2)
+                call files(source_root)%read_i32_2(source_path, i2, status)
+                if (status%ok()) call writers(destination_root)%add_i32_2( &
+                    destination_path, i2, status)
+            case (3)
+                call files(source_root)%read_i32_3(source_path, i3, status)
+                if (status%ok()) call writers(destination_root)%add_i32_3( &
+                    destination_path, i3, status)
+            case default
+                call status%set(FORTIO_ENOTSUP, "integer HDF5 copy rank is not supported")
+            end select
+        case (1)
+            select case (rank)
+            case (0)
+                call files(source_root)%read_r64_scalar(source_path, r0, status)
+                if (status%ok()) call writers(destination_root)%add_r64_scalar( &
+                    destination_path, r0, status)
+            case (1)
+                call files(source_root)%read_r64_1(source_path, r1, status)
+                if (status%ok()) call writers(destination_root)%add_r64_1( &
+                    destination_path, r1, status)
+            case (2)
+                call files(source_root)%read_r64_2(source_path, r2, status)
+                if (status%ok()) call writers(destination_root)%add_r64_2( &
+                    destination_path, r2, status)
+            case (3)
+                call files(source_root)%read_r64_3(source_path, r3, status)
+                if (status%ok()) call writers(destination_root)%add_r64_3( &
+                    destination_path, r3, status)
+            case (4)
+                call files(source_root)%read_r64_4(source_path, r4, status)
+                if (status%ok()) call writers(destination_root)%add_r64_4( &
+                    destination_path, r4, status)
+            case (5)
+                call files(source_root)%read_r64_5(source_path, r5, status)
+                if (status%ok()) call writers(destination_root)%add_r64_5( &
+                    destination_path, r5, status)
+            case default
+                call status%set(FORTIO_ENOTSUP, "real HDF5 copy rank is not supported")
+            end select
+        case (3)
+            call files(source_root)%read_text_scalar(source_path, text, status)
+            if (status%ok()) call writers(destination_root)%add_text_scalar( &
+                destination_path, text, status)
+        case (6)
+            select case (rank)
+            case (1)
+                call files(source_root)%read_c64_1(source_path, c1, status)
+                if (status%ok()) call writers(destination_root)%add_c64_1( &
+                    destination_path, c1, status)
+            case (2)
+                call files(source_root)%read_c64_2(source_path, c2, status)
+                if (status%ok()) call writers(destination_root)%add_c64_2( &
+                    destination_path, c2, status)
+            case (3)
+                call files(source_root)%read_c64_3(source_path, c3, status)
+                if (status%ok()) call writers(destination_root)%add_c64_3( &
+                    destination_path, c3, status)
+            case default
+                call status%set(FORTIO_ENOTSUP, "complex HDF5 copy rank is not supported")
+            end select
+        case default
+            call status%set(FORTIO_ENOTSUP, "HDF5 copy datatype is not supported")
+        end select
+        call require_ok(status)
+        call files(source_root)%get_attributes(source_path, attributes, status)
+        call require_ok(status)
+        do attribute_index = 1, size(attributes)
+            if (allocated(attributes(attribute_index)%values_i32)) then
+                call writers(destination_root)%add_i32_attribute(destination_path, &
+                    attributes(attribute_index)%name, &
+                    attributes(attribute_index)%values_i32, status)
+            else if (allocated(attributes(attribute_index)%values_r64)) then
+                if (size(attributes(attribute_index)%values_r64) /= 1) then
+                    call status%set(FORTIO_ENOTSUP, &
+                        "real vector HDF5 attributes are not required")
+                else
+                    call writers(destination_root)%add_r64_attribute(destination_path, &
+                        attributes(attribute_index)%name, &
+                        attributes(attribute_index)%values_r64(1), status)
+                end if
+            else if (allocated(attributes(attribute_index)%value_text)) then
+                call writers(destination_root)%add_text_attribute(destination_path, &
+                    attributes(attribute_index)%name, &
+                    attributes(attribute_index)%value_text, status)
+            end if
+            call require_ok(status)
+        end do
+    end subroutine copy_dataset
+
+    subroutine h5_define_unlimited_array(h5id, dataset, type_id, dataset_id)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(HID_T), intent(in) :: type_id
+        integer(HID_T), intent(out) :: dataset_id
+        integer :: root, slot
+
+        slot = require_mode(h5id, MODE_WRITE)
+        root = root_slot(slot)
+        slot = allocate_handle()
+        handle_mode(slot) = MODE_UNLIMITED
+        root_slot(slot) = root
+        root_handle(slot) = .false.
+        unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
+        unlimited_buffers(slot)%type_code = int(type_id)
+        select case (unlimited_buffers(slot)%type_code)
+        case (UNLIMITED_INTEGER)
+            allocate(unlimited_buffers(slot)%values_i32(16), source=0_int32)
+        case (UNLIMITED_DOUBLE)
+            allocate(unlimited_buffers(slot)%values_r64(16), source=0.0_real64)
+        case default
+            call clear_handle(slot)
+            error stop "unsupported fortio unlimited-array type"
+        end select
+        dataset_id = int(slot, HID_T)
+    end subroutine h5_define_unlimited_array
+
+    subroutine h5_append_int(dataset_id, value, position)
+        integer(HID_T), intent(in) :: dataset_id
+        integer, intent(in) :: value, position
+        integer(int32), allocatable :: temporary(:)
+        integer :: slot
+
+        slot = require_mode(dataset_id, MODE_UNLIMITED)
+        if (unlimited_buffers(slot)%type_code /= UNLIMITED_INTEGER) &
+            error stop "integer appended to non-integer HDF5 dataset"
+        if (position < 1) error stop "HDF5 append position must be positive"
+        if (position > size(unlimited_buffers(slot)%values_i32)) then
+            allocate(temporary(max(position, 2*size(unlimited_buffers(slot)%values_i32))), &
+                source=0_int32)
+            temporary(:size(unlimited_buffers(slot)%values_i32)) = &
+                unlimited_buffers(slot)%values_i32
+            call move_alloc(temporary, unlimited_buffers(slot)%values_i32)
+        end if
+        unlimited_buffers(slot)%values_i32(position) = int(value, int32)
+        unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+    end subroutine h5_append_int
+
+    subroutine h5_append_double(dataset_id, value, position)
+        integer(HID_T), intent(in) :: dataset_id
+        real(real64), intent(in) :: value
+        integer, intent(in) :: position
+        real(real64), allocatable :: temporary(:)
+        integer :: slot
+
+        slot = require_mode(dataset_id, MODE_UNLIMITED)
+        if (unlimited_buffers(slot)%type_code /= UNLIMITED_DOUBLE) &
+            error stop "real appended to non-real HDF5 dataset"
+        if (position < 1) error stop "HDF5 append position must be positive"
+        if (position > size(unlimited_buffers(slot)%values_r64)) then
+            allocate(temporary(max(position, 2*size(unlimited_buffers(slot)%values_r64))), &
+                source=0.0_real64)
+            temporary(:size(unlimited_buffers(slot)%values_r64)) = &
+                unlimited_buffers(slot)%values_r64
+            call move_alloc(temporary, unlimited_buffers(slot)%values_r64)
+        end if
+        unlimited_buffers(slot)%values_r64(position) = value
+        unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+    end subroutine h5_append_double
 
     subroutine h5_get_int(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -190,6 +472,21 @@ contains
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
         value = int(temporary, kind(value))
     end subroutine h5_get_int_1
+
+    subroutine h5_get_i64_1(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(int64), intent(out) :: value(:)
+        integer(int64), allocatable :: temporary(:)
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_i64_1
 
     subroutine h5_get_int_2(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -363,7 +660,7 @@ contains
 
         slot = require_mode(h5id, MODE_READ)
         call files(root_slot(slot))%read_text_scalar(joined_path(slot, dataset), &
-                                                     temporary, status)
+            temporary, status)
         call require_ok(status)
         value = ""
         do i = 1, min(len(value), len(temporary))
@@ -489,14 +786,14 @@ contains
         lower = 0
         upper = 0
         call files(root_slot(slot))%read_i32_attribute(joined_path(slot, dataset), &
-                                                       "lbounds", values, found, status)
+            "lbounds", values, found, status)
         call require_ok(status)
         if (found) then
             if (size(values) /= size(lower)) error stop "HDF5 lower-bound rank mismatch"
             lower = int(values, kind(lower))
         end if
         call files(root_slot(slot))%read_i32_attribute(joined_path(slot, dataset), &
-                                                       "ubounds", values, found, status)
+            "ubounds", values, found, status)
         call require_ok(status)
         if (found) then
             if (size(values) /= size(upper)) error stop "HDF5 upper-bound rank mismatch"
@@ -515,7 +812,7 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call prepare_overwrite(slot, dataset)
         call writers(root_slot(slot))%add_i32_scalar(joined_path(slot, dataset), &
-                                                     int(value, int32), status)
+            int(value, int32), status)
         call require_ok(status)
         call add_common_attributes(slot, dataset, comment, unit)
     end subroutine h5_add_int
@@ -565,7 +862,7 @@ contains
         if (allocated(value)) then
             call add_int_1(h5id, dataset, value)
             call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       lbound(value), ubound(value))
+                lbound(value), ubound(value))
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
         else
             if (present(default)) then
@@ -574,9 +871,43 @@ contains
                 call h5_add_int(h5id, dataset, 0)
             end if
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       "value not allocated")
+                "value not allocated")
         end if
     end subroutine h5_add_int_1_nobounds
+
+    subroutine h5_add_i64_1_bounds(h5id, dataset, value, lbounds, ubounds, comment, unit)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(int64), intent(in) :: value(:)
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        character(len=*), intent(in), optional :: comment, unit
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        call require_bounds(shape(value), lbounds, ubounds)
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_i64_1(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+    end subroutine h5_add_i64_1_bounds
+
+    subroutine h5_add_i64_1_nobounds(h5id, dataset, value, comment, unit)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(int64), intent(in) :: value(:)
+        character(len=*), intent(in), optional :: comment, unit
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_i64_1(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbound(value), ubound(value))
+        call add_common_attributes(slot, dataset, comment, unit)
+    end subroutine h5_add_i64_1_nobounds
 
     subroutine add_int_1(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -615,7 +946,7 @@ contains
         if (allocated(value)) then
             call add_int_2(h5id, dataset, value)
             call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       lbound(value), ubound(value))
+                lbound(value), ubound(value))
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
         else
             if (present(default)) then
@@ -624,7 +955,7 @@ contains
                 call h5_add_int(h5id, dataset, 0)
             end if
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       "value not allocated")
+                "value not allocated")
         end if
     end subroutine h5_add_int_2_nobounds
 
@@ -680,7 +1011,7 @@ contains
     end subroutine h5_add_double_0
 
     subroutine h5_add_complex_1(h5id, dataset, value, lbounds, ubounds, &
-                                comment, unit, accuracy)
+            comment, unit, accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         complex(dcp), intent(in) :: value(:)
@@ -701,7 +1032,7 @@ contains
     end subroutine h5_add_complex_1
 
     subroutine h5_add_complex_2(h5id, dataset, value, lbounds, ubounds, &
-                                comment, unit, accuracy)
+            comment, unit, accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         complex(dcp), intent(in) :: value(:, :)
@@ -722,7 +1053,7 @@ contains
     end subroutine h5_add_complex_2
 
     subroutine h5_add_complex_3(h5id, dataset, value, lbounds, ubounds, &
-                                comment, unit, accuracy)
+            comment, unit, accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         complex(dcp), intent(in) :: value(:, :, :)
@@ -743,7 +1074,7 @@ contains
     end subroutine h5_add_complex_3
 
     subroutine h5_add_double_1_bounds(h5id, dataset, value, lbounds, ubounds, &
-                                      comment, unit, accuracy)
+            comment, unit, accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(in) :: value(:)
@@ -759,7 +1090,7 @@ contains
     end subroutine h5_add_double_1_bounds
 
     subroutine h5_add_double_1_nobounds(h5id, dataset, value, comment, unit, default, &
-                                        accuracy)
+            accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), allocatable, intent(in) :: value(:)
@@ -769,7 +1100,7 @@ contains
         if (allocated(value)) then
             call add_double_1(h5id, dataset, value)
             call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       lbound(value), ubound(value))
+                lbound(value), ubound(value))
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
             call add_accuracy_attribute(require_mode(h5id, MODE_WRITE), dataset, accuracy)
         else
@@ -779,7 +1110,7 @@ contains
                 call h5_add_double_0(h5id, dataset, 0.0_real64)
             end if
             call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
-                                       "value not allocated")
+                "value not allocated")
         end if
     end subroutine h5_add_double_1_nobounds
 
@@ -932,12 +1263,33 @@ contains
         if (handle_mode(slot) == MODE_READ) then
             call files(slot)%close(status)
         else if (handle_mode(slot) == MODE_WRITE) then
+            call flush_unlimited_buffers(slot)
             call writers(slot)%close(status)
         else
             error stop "invalid fortio HDF5 handle mode"
         end if
         call require_ok(status)
     end subroutine close_root
+
+    subroutine flush_unlimited_buffers(root)
+        integer, intent(in) :: root
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        do slot = 1, MAX_OPEN_FILES
+            if (.not. in_use(slot)) cycle
+            if (root_slot(slot) /= root .or. handle_mode(slot) /= MODE_UNLIMITED) cycle
+            select case (unlimited_buffers(slot)%type_code)
+            case (UNLIMITED_INTEGER)
+                call writers(root)%add_i32_1(trim(unlimited_buffers(slot)%path), &
+                    unlimited_buffers(slot)%values_i32(:unlimited_buffers(slot)%used), status)
+            case (UNLIMITED_DOUBLE)
+                call writers(root)%add_r64_1(trim(unlimited_buffers(slot)%path), &
+                    unlimited_buffers(slot)%values_r64(:unlimited_buffers(slot)%used), status)
+            end select
+            call require_ok(status)
+        end do
+    end subroutine flush_unlimited_buffers
 
     subroutine invalidate_root(root)
         integer, intent(in) :: root
@@ -966,6 +1318,13 @@ contains
         root_slot(slot) = 0
         root_handle(slot) = .false.
         handle_prefix(slot) = ""
+        unlimited_buffers(slot)%path = ""
+        unlimited_buffers(slot)%type_code = 0
+        unlimited_buffers(slot)%used = 0
+        if (allocated(unlimited_buffers(slot)%values_i32)) &
+            deallocate(unlimited_buffers(slot)%values_i32)
+        if (allocated(unlimited_buffers(slot)%values_r64)) &
+            deallocate(unlimited_buffers(slot)%values_r64)
     end subroutine clear_handle
 
     function joined_path(slot, name) result(path)
@@ -987,6 +1346,25 @@ contains
             path = trim(handle_prefix(slot))//"/"//clean_name
         end if
     end function joined_path
+
+    function append_path(prefix, name) result(path)
+        character(len=*), intent(in) :: prefix, name
+        character(len=:), allocatable :: path
+        character(len=:), allocatable :: clean_prefix, clean_name
+
+        clean_prefix = trim(adjustl(prefix))
+        clean_name = trim(adjustl(name))
+        if (clean_prefix == "." .or. clean_prefix == "/") clean_prefix = ""
+        do while (len(clean_name) > 0)
+            if (clean_name(1:1) /= "/") exit
+            clean_name = clean_name(2:)
+        end do
+        if (len(clean_prefix) == 0) then
+            path = clean_name
+        else
+            path = trim(clean_prefix)//"/"//clean_name
+        end if
+    end function append_path
 
     subroutine require_bounds(actual_shape, lbounds, ubounds)
         integer, intent(in) :: actual_shape(:), lbounds(:), ubounds(:)
@@ -1049,7 +1427,7 @@ contains
 
         if (.not. present(accuracy)) return
         call writers(root_slot(slot))%add_r64_attribute(joined_path(slot, dataset), &
-                                                        "accuracy", accuracy, status)
+            "accuracy", accuracy, status)
         call require_ok(status)
     end subroutine add_accuracy_attribute
 
