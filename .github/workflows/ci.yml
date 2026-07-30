@@ -64,6 +64,27 @@ jobs:
             build-benchmark/benchmark_fortio_hdf5 \
             build-benchmark/benchmark_native_hdf5 --enforce
 
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and independent format oracles
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y gfortran netcdf-bin python3-h5py
+      - name: Configure ThreadSanitizer
+        run: >
+          cmake -S . -B build-tsan -DBUILD_TESTING=ON
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_Fortran_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -O1 -g"
+          -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -O1 -g"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+      - run: cmake --build build-tsan --parallel
+      - name: Test concurrent OpenMP I/O
+        run: >
+          OMP_NUM_THREADS=8 ctest --test-dir build-tsan
+          -R "^(thread_safety|concurrent_hdf5_writes)$" --output-on-failure
+
   windows:
     runs-on: windows-latest
     steps:
