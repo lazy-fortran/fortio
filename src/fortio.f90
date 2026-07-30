@@ -29,12 +29,15 @@ module fortio
         procedure :: read_r64_3 => file_read_r64_3
         procedure :: read_r64_4 => file_read_r64_4
         procedure :: read_r64_5 => file_read_r64_5
+        procedure :: read_c64_1 => file_read_c64_1
+        procedure :: read_c64_2 => file_read_c64_2
+        procedure :: read_c64_3 => file_read_c64_3
         procedure :: read_i32_attribute => file_read_i32_attribute
         procedure :: read_text_scalar => file_read_text_scalar
         procedure :: exists => file_exists
         generic :: read => read_i32_scalar, read_i32_1, read_i32_2, read_i32_3, &
                            read_r64_scalar, read_r64_1, read_r64_2, read_r64_3, &
-                           read_r64_4, read_r64_5
+                           read_r64_4, read_r64_5, read_c64_1, read_c64_2, read_c64_3
         final :: file_finalize
     end type fortio_file_t
 
@@ -44,6 +47,45 @@ module fortio
     public :: FORTIO_EEXIST
 
 contains
+
+    subroutine file_read_c64_1(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: value(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "complex data requires HDF5")
+            return
+        end if
+        call this%hdf5%read_c64_1(path, value, status)
+    end subroutine file_read_c64_1
+
+    subroutine file_read_c64_2(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: value(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "complex data requires HDF5")
+            return
+        end if
+        call this%hdf5%read_c64_2(path, value, status)
+    end subroutine file_read_c64_2
+
+    subroutine file_read_c64_3(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: value(:, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "complex data requires HDF5")
+            return
+        end if
+        call this%hdf5%read_c64_3(path, value, status)
+    end subroutine file_read_c64_3
 
     subroutine file_open(this, path, status)
         class(fortio_file_t), intent(inout) :: this

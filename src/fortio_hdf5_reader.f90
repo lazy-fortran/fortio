@@ -15,6 +15,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_TYPE_INTEGER = 0
     integer, parameter :: H5_TYPE_FLOAT = 1
     integer, parameter :: H5_TYPE_STRING = 3
+    integer, parameter :: H5_TYPE_COMPOUND = 6
     integer, parameter :: H5_LAYOUT_CONTIGUOUS = 1
 
     type :: hdf5_link_t
@@ -57,6 +58,9 @@ module fortio_hdf5_reader
         procedure :: read_r64_3 => hdf5_read_r64_3
         procedure :: read_r64_4 => hdf5_read_r64_4
         procedure :: read_r64_5 => hdf5_read_r64_5
+        procedure :: read_c64_1 => hdf5_read_c64_1
+        procedure :: read_c64_2 => hdf5_read_c64_2
+        procedure :: read_c64_3 => hdf5_read_c64_3
         procedure :: read_i32_attribute => hdf5_read_i32_attribute
         procedure :: read_text_scalar => hdf5_read_text_scalar
         procedure :: exists => hdf5_exists
@@ -480,6 +484,91 @@ contains
             call status%set(FORTIO_ETYPE, "floating-point width is not supported")
         end select
     end subroutine read_r64_flat
+
+    subroutine hdf5_read_c64_1(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 1) then
+            call status%set(FORTIO_ESHAPE, "complex dataset rank does not match rank 1")
+            return
+        end if
+        call read_c64_flat(this, path, values, status)
+    end subroutine hdf5_read_c64_1
+
+    subroutine hdf5_read_c64_2(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        complex(real64), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 2) then
+            call status%set(FORTIO_ESHAPE, "complex dataset rank does not match rank 2")
+            return
+        end if
+        call read_c64_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(2), dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_c64_2
+
+    subroutine hdf5_read_c64_3(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: values(:, :, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        complex(real64), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 3) then
+            call status%set(FORTIO_ESHAPE, "complex dataset rank does not match rank 3")
+            return
+        end if
+        call read_c64_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(3), dataset%dimensions(2), &
+                        dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_c64_3
+
+    subroutine read_c64_flat(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        complex(real64), allocatable, intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        real(real64) :: real_part, imaginary_part
+        integer(int64) :: count
+        integer :: i
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (dataset%type_class /= H5_TYPE_COMPOUND .or. dataset%element_size /= 16) then
+            call status%set(FORTIO_ETYPE, "dataset is not a double complex compound")
+            return
+        end if
+        count = product(dataset%dimensions)
+        allocate(values(count))
+        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        do i = 1, size(values)
+            call this%reader%read_le_r64(real_part, status)
+            if (.not. status%ok()) return
+            call this%reader%read_le_r64(imaginary_part, status)
+            if (.not. status%ok()) return
+            values(i) = cmplx(real_part, imaginary_part, real64)
+        end do
+    end subroutine read_c64_flat
 
     subroutine find_dataset(this, path, dataset, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -907,7 +996,8 @@ contains
         dataset%little_endian = .not. btest(byte_value(class_bits(1)), 0)
         if (dataset%type_class /= H5_TYPE_INTEGER .and. &
             dataset%type_class /= H5_TYPE_FLOAT .and. &
-            dataset%type_class /= H5_TYPE_STRING) then
+            dataset%type_class /= H5_TYPE_STRING .and. &
+            dataset%type_class /= H5_TYPE_COMPOUND) then
             call status%set(FORTIO_ENOTSUP, "HDF5 datatype class is not supported")
         end if
     end subroutine parse_datatype_message

@@ -6,6 +6,7 @@ module hdf5_tools
     private
 
     integer, parameter, public :: HID_T = int64
+    integer, parameter, public :: dcp = real64
     integer, parameter :: MAX_OPEN_FILES = 64
     integer, parameter :: MODE_READ = 1, MODE_WRITE = 2
     type(fortio_file_t), save :: files(MAX_OPEN_FILES)
@@ -27,6 +28,7 @@ module hdf5_tools
         module procedure h5_get_double_3, h5_get_double_4, h5_get_double_5
         module procedure h5_get_string
         module procedure h5_get_logical
+        module procedure h5_get_complex_1, h5_get_complex_2, h5_get_complex_3
     end interface h5_get
 
     interface h5_add
@@ -40,6 +42,7 @@ module hdf5_tools
         module procedure h5_add_double_4, h5_add_double_5
         module procedure h5_add_logical
         module procedure h5_add_string
+        module procedure h5_add_complex_1, h5_add_complex_2, h5_add_complex_3
     end interface h5_add
 
     interface h5_get_bounds
@@ -304,6 +307,51 @@ contains
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
         value = temporary
     end subroutine h5_get_double_5
+
+    subroutine h5_get_complex_1(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(out) :: value(:)
+        complex(dcp), allocatable :: temporary(:)
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_complex_1
+
+    subroutine h5_get_complex_2(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(out) :: value(:, :)
+        complex(dcp), allocatable :: temporary(:, :)
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_complex_2
+
+    subroutine h5_get_complex_3(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(out) :: value(:, :, :)
+        complex(dcp), allocatable :: temporary(:, :, :)
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_complex_3
 
     subroutine h5_get_string(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -630,6 +678,69 @@ contains
         call add_common_attributes(slot, dataset, comment, unit)
         call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_0
+
+    subroutine h5_add_complex_1(h5id, dataset, value, lbounds, ubounds, &
+                                comment, unit, accuracy)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(in) :: value(:)
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        character(len=*), intent(in), optional :: comment, unit
+        real(real64), intent(in), optional :: accuracy
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        call require_bounds(shape(value), lbounds, ubounds)
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_c64_1(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
+    end subroutine h5_add_complex_1
+
+    subroutine h5_add_complex_2(h5id, dataset, value, lbounds, ubounds, &
+                                comment, unit, accuracy)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(in) :: value(:, :)
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        character(len=*), intent(in), optional :: comment, unit
+        real(real64), intent(in), optional :: accuracy
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        call require_bounds(shape(value), lbounds, ubounds)
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_c64_2(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
+    end subroutine h5_add_complex_2
+
+    subroutine h5_add_complex_3(h5id, dataset, value, lbounds, ubounds, &
+                                comment, unit, accuracy)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        complex(dcp), intent(in) :: value(:, :, :)
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        character(len=*), intent(in), optional :: comment, unit
+        real(real64), intent(in), optional :: accuracy
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        call require_bounds(shape(value), lbounds, ubounds)
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_c64_3(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
+    end subroutine h5_add_complex_3
 
     subroutine h5_add_double_1_bounds(h5id, dataset, value, lbounds, ubounds, &
                                       comment, unit, accuracy)
