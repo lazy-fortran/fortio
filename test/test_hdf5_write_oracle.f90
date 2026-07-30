@@ -11,13 +11,18 @@ program test_hdf5_write_oracle
     integer(int32) :: scalar
     real(real64), allocatable :: vector(:), matrix(:, :)
     real(real64) :: matrix_input(3, 2)
+    real(real64) :: rank5(2, 1, 2, 1, 3)
+    integer(int32) :: int_cube(2, 2, 2)
     integer :: command_status, unit, io_status
     logical :: found_scalar, found_vector, found_matrix, found_grid, found_deep
+    logical :: found_rank5, found_int_cube
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/fortio-written.h5"
     dump_path = trim(path)//".dump"
     matrix_input = reshape([1, 2, 3, 4, 5, 6], [3, 2])
+    rank5 = reshape([(real(unit, real64), unit=1, size(rank5))], shape(rank5))
+    int_cube = reshape([(int(unit, int32), unit=1, size(int_cube))], shape(int_cube))
 
     call writer%create(trim(path), status)
     if (.not. status%ok()) error stop status%message
@@ -33,6 +38,10 @@ program test_hdf5_write_oracle
     if (.not. status%ok()) error stop status%message
     call writer%add_r64_scalar("/grid/deep/value", 9.5_real64, status)
     if (.not. status%ok()) error stop status%message
+    call writer%add_i32_3("/grid/int_cube", int_cube, status)
+    if (.not. status%ok()) error stop status%message
+    call writer%add_r64_5("/grid/rank5", rank5, status)
+    if (.not. status%ok()) error stop status%message
     call writer%close(status)
     if (.not. status%ok()) error stop status%message
 
@@ -45,6 +54,8 @@ program test_hdf5_write_oracle
     found_matrix = .false.
     found_grid = .false.
     found_deep = .false.
+    found_rank5 = .false.
+    found_int_cube = .false.
     do
         read(unit, '(A)', iostat=io_status) line
         if (io_status /= 0) exit
@@ -53,6 +64,8 @@ program test_hdf5_write_oracle
         if (index(line, "(0,0): 1, 2, 3") > 0) found_matrix = .true.
         if (index(line, 'GROUP "grid"') > 0) found_grid = .true.
         if (index(line, 'GROUP "deep"') > 0) found_deep = .true.
+        if (index(line, "SIMPLE { ( 3, 1, 2, 1, 2 )") > 0) found_rank5 = .true.
+        if (index(line, "(0,0,0): 1, 2") > 0) found_int_cube = .true.
     end do
     close(unit)
     if (.not. found_scalar) error stop "h5dump scalar differs"
@@ -60,6 +73,8 @@ program test_hdf5_write_oracle
     if (.not. found_matrix) error stop "h5dump matrix differs"
     if (.not. found_grid) error stop "h5dump nested group missing"
     if (.not. found_deep) error stop "h5dump deep group missing"
+    if (.not. found_rank5) error stop "h5dump rank-5 shape differs"
+    if (.not. found_int_cube) error stop "h5dump integer cube differs"
 
     call reader%open(trim(path), status)
     if (.not. status%ok()) error stop status%message

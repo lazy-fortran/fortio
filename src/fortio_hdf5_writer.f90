@@ -39,10 +39,14 @@ module fortio_hdf5_writer
         procedure :: define_group => hdf5_define_group
         procedure :: add_i32_scalar => hdf5_add_i32_scalar
         procedure :: add_i32_1 => hdf5_add_i32_1
+        procedure :: add_i32_2 => hdf5_add_i32_2
+        procedure :: add_i32_3 => hdf5_add_i32_3
         procedure :: add_r64_scalar => hdf5_add_r64_scalar
         procedure :: add_r64_1 => hdf5_add_r64_1
         procedure :: add_r64_2 => hdf5_add_r64_2
         procedure :: add_r64_3 => hdf5_add_r64_3
+        procedure :: add_r64_4 => hdf5_add_r64_4
+        procedure :: add_r64_5 => hdf5_add_r64_5
         procedure :: close => hdf5_writer_close
     end type hdf5_writer_t
 
@@ -95,6 +99,26 @@ contains
         call add_i32_flat(this, name, [int(size(values), int64)], values, status)
     end subroutine hdf5_add_i32_1
 
+    subroutine hdf5_add_i32_2(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_i32_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_i32_2
+
+    subroutine hdf5_add_i32_3(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: values(:, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_i32_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_i32_3
+
     subroutine hdf5_add_r64_scalar(this, name, value, status)
         class(hdf5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: name
@@ -132,6 +156,26 @@ contains
         call add_r64_flat(this, name, int(shape(values), int64), &
                           reshape(values, [size(values)]), status)
     end subroutine hdf5_add_r64_3
+
+    subroutine hdf5_add_r64_4(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        real(real64), intent(in) :: values(:, :, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_r64_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_r64_4
+
+    subroutine hdf5_add_r64_5(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        real(real64), intent(in) :: values(:, :, :, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call add_r64_flat(this, name, int(shape(values), int64), &
+                          reshape(values, [size(values)]), status)
+    end subroutine hdf5_add_r64_5
 
     subroutine add_i32_flat(this, name, dimensions, values, status)
         class(hdf5_writer_t), intent(inout) :: this
