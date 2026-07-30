@@ -3,9 +3,11 @@ module fortio_posix
     implicit none
     private
 
-    public :: posix_open_read, posix_open_write, posix_close, posix_pread, posix_pwrite
+    public :: posix_open_read, posix_open_write, posix_create_write, posix_close
+    public :: posix_path_exists, posix_pread, posix_pwrite, posix_pwrite_swap64
     public :: mapped_open, mapped_copy, mapped_copy_swap64, mapped_close
     public :: handle_table_lock, handle_table_unlock
+    public :: write_session_lock, write_session_unlock
 
     interface
         function posix_open_read(path) bind(C, name="fortio_posix_open_read") result(descriptor)
@@ -19,6 +21,20 @@ module fortio_posix
             character(kind=c_char), intent(in) :: path(*)
             integer(c_int) :: descriptor
         end function posix_open_write
+
+        function posix_create_write(path) &
+                bind(C, name="fortio_posix_create_write") result(descriptor)
+            import :: c_char, c_int
+            character(kind=c_char), intent(in) :: path(*)
+            integer(c_int) :: descriptor
+        end function posix_create_write
+
+        function posix_path_exists(path) &
+                bind(C, name="fortio_posix_path_exists") result(exists)
+            import :: c_char, c_int
+            character(kind=c_char), intent(in) :: path(*)
+            integer(c_int) :: exists
+        end function posix_path_exists
 
         function posix_close(descriptor) bind(C, name="fortio_posix_close") result(code)
             import :: c_int
@@ -45,6 +61,16 @@ module fortio_posix
             integer(c_int64_t), value :: offset
             integer(c_int64_t) :: bytes_written
         end function posix_pwrite
+
+        function posix_pwrite_swap64(descriptor, buffer, count, offset) &
+                bind(C, name="fortio_posix_pwrite_swap64") result(bytes_written)
+            import :: c_int, c_int64_t, c_ptr, c_size_t
+            integer(c_int), value :: descriptor
+            type(c_ptr), value :: buffer
+            integer(c_size_t), value :: count
+            integer(c_int64_t), value :: offset
+            integer(c_int64_t) :: bytes_written
+        end function posix_pwrite_swap64
 
         function mapped_open(descriptor) bind(C, name="fortio_mapped_open") result(mapping)
             import :: c_int, c_ptr
@@ -81,5 +107,17 @@ module fortio_posix
 
         subroutine handle_table_unlock() bind(C, name="fortio_handle_table_unlock")
         end subroutine handle_table_unlock
+
+        function write_session_lock(path) &
+                bind(C, name="fortio_write_session_lock") result(token)
+            import :: c_char, c_int
+            character(kind=c_char), intent(in) :: path(*)
+            integer(c_int) :: token
+        end function write_session_lock
+
+        subroutine write_session_unlock(token) bind(C, name="fortio_write_session_unlock")
+            import :: c_int
+            integer(c_int), value :: token
+        end subroutine write_session_unlock
     end interface
 end module fortio_posix

@@ -155,6 +155,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py"
         "${CMAKE_CURRENT_BINARY_DIR}/thread-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
+
+    add_executable(test_concurrent_hdf5_writes test/test_concurrent_hdf5_writes.f90)
+    target_link_libraries(test_concurrent_hdf5_writes PRIVATE fortio OpenMP::OpenMP_Fortran)
+    add_test(NAME concurrent_hdf5_writes COMMAND test_concurrent_hdf5_writes
+        "${CMAKE_CURRENT_BINARY_DIR}/concurrent-writes.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_thread_writes.py")
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets
