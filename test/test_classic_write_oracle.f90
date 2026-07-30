@@ -1,18 +1,24 @@
 program test_classic_write_oracle
-    use, intrinsic :: iso_fortran_env, only: int32, real64
+    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use netcdf, only: nf90_create, nf90_def_dim, nf90_def_var, nf90_enddef, &
-                      nf90_put_att, nf90_put_var, nf90_close, NF90_CLOBBER, &
-                      NF90_CHAR, NF90_DOUBLE, NF90_EEXIST, NF90_GLOBAL, NF90_INT, &
-                      NF90_NETCDF4, NF90_NOCLOBBER, NF90_NOERR, nf90_inq_varid
+        nf90_put_att, nf90_put_var, nf90_close, NF90_CLOBBER, &
+        NF90_BYTE, NF90_CHAR, NF90_DOUBLE, NF90_EEXIST, NF90_GLOBAL, &
+        NF90_INT, &
+        NF90_NETCDF4, NF90_NOCLOBBER, NF90_NOERR, nf90_inq_varid
     implicit none
 
     integer :: ncid, x_dim, y_dim, string_dim, group_dim
-    integer :: scalar_var, x_var, matrix_var, rank4_var, group_var, mode_var, status
+    integer :: scalar_var, x_var, matrix_var, slice_var, int_matrix_var, flags_var
+    integer :: rank4_var, group_var, mode_var, status
     character(len=1024) :: path, command, line
     real(real64) :: x(3), matrix(3, 2)
     real(real64) :: rank4(2, 2, 2, 2)
+    integer(int32) :: int_matrix(3, 2)
+    integer(int8) :: flags(3)
     integer :: unit, io_status, command_status
-    logical :: found_global, found_units, found_bounds, found_groups, found_mode, found_rank4
+    logical :: found_global, found_units, found_bounds, found_groups, found_mode
+    logical :: found_rank4, found_counter, found_slice_first, found_slice_second
+    logical :: found_int_matrix_first, found_int_matrix_second, found_flags
     character(len=5) :: groups(2)
 
     call get_command_argument(1, path)
@@ -34,8 +40,14 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "define x values"
     status = nf90_def_var(ncid, "matrix", NF90_DOUBLE, [x_dim, y_dim], matrix_var)
     if (status /= NF90_NOERR) error stop "define matrix"
+    status = nf90_def_var(ncid, "slice_matrix", NF90_DOUBLE, [x_dim, y_dim], slice_var)
+    if (status /= NF90_NOERR) error stop "define slice matrix"
+    status = nf90_def_var(ncid, "int_matrix", NF90_INT, [x_dim, y_dim], int_matrix_var)
+    if (status /= NF90_NOERR) error stop "define integer matrix"
+    status = nf90_def_var(ncid, "flags", NF90_BYTE, [x_dim], flags_var)
+    if (status /= NF90_NOERR) error stop "define byte flags"
     status = nf90_def_var(ncid, "rank4", NF90_DOUBLE, [y_dim, y_dim, y_dim, y_dim], &
-                          rank4_var)
+        rank4_var)
     if (status /= NF90_NOERR) error stop "define rank4"
     status = nf90_def_var(ncid, "coil_group", NF90_CHAR, [string_dim, group_dim], group_var)
     if (status /= NF90_NOERR) error stop "define character array"
@@ -47,6 +59,8 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "put variable text attribute"
     status = nf90_put_att(ncid, matrix_var, "lbound", [1_int32, -2_int32])
     if (status /= NF90_NOERR) error stop "put integer vector attribute"
+    status = nf90_put_att(ncid, NF90_GLOBAL, "event_count", 1234567890123_int64)
+    if (status /= NF90_NOERR) error stop "put int64-compatible attribute"
     status = nf90_enddef(ncid)
     if (status /= NF90_NOERR) error stop "end definition"
 
@@ -58,6 +72,15 @@ program test_classic_write_oracle
     if (status /= NF90_NOERR) error stop "put x"
     status = nf90_put_var(ncid, matrix_var, matrix)
     if (status /= NF90_NOERR) error stop "put matrix"
+    status = nf90_put_var(ncid, slice_var, [10.0_real64, 20.0_real64], &
+        start=[2, 1], count=[1, 2])
+    if (status /= NF90_NOERR) error stop "put rank-1 hyperslab"
+    int_matrix = reshape([1, 2, 3, 4, 5, 6], shape(int_matrix))
+    status = nf90_put_var(ncid, int_matrix_var, int_matrix)
+    if (status /= NF90_NOERR) error stop "put integer matrix"
+    flags = [-1_int8, 0_int8, 1_int8]
+    status = nf90_put_var(ncid, flags_var, flags)
+    if (status /= NF90_NOERR) error stop "put byte flags"
     rank4 = reshape([(real(status, real64), status=1, size(rank4))], shape(rank4))
     status = nf90_put_var(ncid, rank4_var, rank4)
     if (status /= NF90_NOERR) error stop "put rank4"
@@ -75,8 +98,9 @@ program test_classic_write_oracle
     status = nf90_create(trim(path), ior(NF90_NOCLOBBER, NF90_NETCDF4), ncid)
     if (status /= NF90_EEXIST) error stop "noclobber did not preserve existing file"
 
-    command = "ncdump -v coil_group,mgrid_mode,rank4 "//trim(path)//" > "// &
-              trim(path)//".header"
+    command = "ncdump -v coil_group,mgrid_mode,rank4,slice_matrix,int_matrix,flags "// &
+        trim(path)//" > "// &
+        trim(path)//".header"
     call execute_command_line(trim(command), exitstat=command_status)
     if (command_status /= 0) error stop "ncdump rejected fortio attribute encoding"
     open(newunit=unit, file=trim(path)//".header", status="old", action="read")
@@ -86,6 +110,12 @@ program test_classic_write_oracle
     found_groups = .false.
     found_mode = .false.
     found_rank4 = .false.
+    found_counter = .false.
+    found_slice_first = .false.
+    found_slice_second = .false.
+    found_int_matrix_first = .false.
+    found_int_matrix_second = .false.
+    found_flags = .false.
     do
         read(unit, '(A)', iostat=io_status) line
         if (io_status /= 0) exit
@@ -95,6 +125,12 @@ program test_classic_write_oracle
         if (index(line, '"alpha",') > 0) found_groups = .true.
         if (index(line, 'mgrid_mode = "RS"') > 0) found_mode = .true.
         if (index(line, 'rank4 =') > 0) found_rank4 = .true.
+        if (index(line, ':event_count = 1234567890123.') > 0) found_counter = .true.
+        if (index(line, '  0, 10, 0,') > 0) found_slice_first = .true.
+        if (index(line, '  0, 20, 0 ;') > 0) found_slice_second = .true.
+        if (index(line, '  1, 2, 3,') > 0) found_int_matrix_first = .true.
+        if (index(line, '  4, 5, 6 ;') > 0) found_int_matrix_second = .true.
+        if (index(line, 'flags = -1, 0, 1') > 0) found_flags = .true.
     end do
     close(unit)
     if (.not. found_global) error stop "ncdump global attribute differs"
@@ -103,4 +139,10 @@ program test_classic_write_oracle
     if (.not. found_groups) error stop "ncdump character array differs"
     if (.not. found_mode) error stop "ncdump character vector differs"
     if (.not. found_rank4) error stop "ncdump rank-4 variable differs"
+    if (.not. found_counter) error stop "ncdump int64-compatible attribute differs"
+    if (.not. found_slice_first .or. .not. found_slice_second) &
+        error stop "ncdump hyperslab values differ"
+    if (.not. found_int_matrix_first .or. .not. found_int_matrix_second) &
+        error stop "ncdump integer matrix differs"
+    if (.not. found_flags) error stop "ncdump byte flags differ"
 end program test_classic_write_oracle

@@ -64,6 +64,7 @@ module fortio_netcdf_classic
         procedure :: read_r64_scalar => classic_read_r64_scalar
         procedure :: read_r64_1 => classic_read_r64_1
         procedure :: read_r64_2 => classic_read_r64_2
+        procedure :: read_r64_2_into => classic_read_r64_2_into
         procedure :: read_r64_3 => classic_read_r64_3
         procedure :: read_r64_4 => classic_read_r64_4
     end type classic_file_t
@@ -326,6 +327,33 @@ contains
         flat(1:size(values)) => values
         call read_r64_values(this, variable_id, flat, status)
     end subroutine classic_read_r64_2
+
+    subroutine classic_read_r64_2_into(this, name, values, status)
+        class(classic_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        real(real64), contiguous, target, intent(out) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+        real(real64), pointer :: flat(:)
+        integer(int64), allocatable :: variable_shape(:)
+        integer :: variable_id
+
+        variable_id = this%variable_id(name)
+        if (variable_id == 0) then
+            call status%set(FORTIO_ENOTFOUND, "variable not found: "//trim(name))
+            return
+        end if
+        variable_shape = this%variable_shape(variable_id)
+        if (size(variable_shape) /= 2) then
+            call status%set(FORTIO_ESHAPE, "variable rank does not match rank 2")
+            return
+        end if
+        if (any(variable_shape /= int(shape(values), int64))) then
+            call status%set(FORTIO_ESHAPE, "variable shape does not match destination")
+            return
+        end if
+        flat(1:size(values)) => values
+        call read_r64_values(this, variable_id, flat, status)
+    end subroutine classic_read_r64_2_into
 
     subroutine classic_read_r64_3(this, name, values, status)
         class(classic_file_t), intent(inout) :: this

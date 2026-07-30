@@ -1,7 +1,7 @@
 module fortio_netcdf_writer
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
     use fortio_bytes, only: byte_writer_t
-    use fortio_netcdf_classic, only: NC_CHAR, NC_INT, NC_DOUBLE
+    use fortio_netcdf_classic, only: NC_BYTE, NC_CHAR, NC_INT, NC_DOUBLE
     use fortio_status, only: fortio_status_t, FORTIO_ESTATE, FORTIO_ETYPE, &
         FORTIO_ESHAPE, FORTIO_ENOTFOUND
     implicit none
@@ -29,6 +29,7 @@ module fortio_netcdf_writer
         character(len=:), allocatable :: name
         integer, allocatable :: dimension_ids(:)
         integer :: type_code = 0
+        integer(int8), allocatable :: values_i8(:)
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
         character(len=:), allocatable :: value_chars
@@ -52,12 +53,15 @@ module fortio_netcdf_writer
         procedure :: put_attribute_text => classic_writer_put_attribute_text
         procedure :: put_attribute_i32 => classic_writer_put_attribute_i32
         procedure :: put_attribute_r64 => classic_writer_put_attribute_r64
+        procedure :: put_i8_1 => classic_writer_put_i8_1
         procedure :: put_i32_scalar => classic_writer_put_i32_scalar
         procedure :: put_i32_1 => classic_writer_put_i32_1
+        procedure :: put_i32_2 => classic_writer_put_i32_2
         procedure :: put_char_scalar => classic_writer_put_char_scalar
         procedure :: put_char_1 => classic_writer_put_char_1
         procedure :: put_r64_scalar => classic_writer_put_r64_scalar
         procedure :: put_r64_1 => classic_writer_put_r64_1
+        procedure :: put_r64_slice => classic_writer_put_r64_slice
         procedure :: put_r64_2 => classic_writer_put_r64_2
         procedure :: put_r64_3 => classic_writer_put_r64_3
         procedure :: put_r64_4 => classic_writer_put_r64_4
@@ -146,6 +150,9 @@ contains
             count_values = count_values*this%dimensions(dimension_ids(i) + 1)%length
         end do
         select case (type_code)
+        case (NC_BYTE)
+            allocate(temporary(count + 1)%values_i8(count_values), source=0_int8)
+            temporary(count + 1)%value_size = padded_size(count_values)
         case (NC_CHAR)
             allocate(character(len=count_values) :: temporary(count + 1)%value_chars)
             temporary(count + 1)%value_chars = repeat(achar(0), int(count_values))
@@ -233,6 +240,16 @@ contains
         end if
     end subroutine classic_writer_put_attribute_r64
 
+    subroutine classic_writer_put_i8_1(this, id, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        integer(int8), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (.not. prepare_put(this, id, NC_BYTE, size(values, kind=int64), status)) return
+        this%variables(id + 1)%values_i8 = values
+    end subroutine classic_writer_put_i8_1
+
     subroutine classic_writer_put_i32_scalar(this, id, value, status)
         class(classic_writer_t), intent(inout) :: this
         integer, intent(in) :: id
@@ -251,6 +268,15 @@ contains
         if (.not. prepare_put(this, id, NC_INT, size(values, kind=int64), status)) return
         this%variables(id + 1)%values_i32 = values
     end subroutine classic_writer_put_i32_1
+
+    subroutine classic_writer_put_i32_2(this, id, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        integer(int32), intent(in) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%put_i32_1(id, reshape(values, [size(values)]), status)
+    end subroutine classic_writer_put_i32_2
 
     subroutine classic_writer_put_char_scalar(this, id, value, status)
         class(classic_writer_t), intent(inout) :: this
@@ -298,6 +324,54 @@ contains
         this%variables(id + 1)%values_r64 = values
     end subroutine classic_writer_put_r64_1
 
+    subroutine classic_writer_put_r64_slice(this, id, values, start, count, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        real(real64), intent(in) :: values(:)
+        integer, intent(in) :: start(:), count(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer, allocatable :: variable_shape(:)
+        integer :: coordinate, dimension, linear, output_index, remaining, stride
+
+        call status%clear()
+        if (.not. prepare_variable(this, id, NC_DOUBLE, status)) return
+        allocate(variable_shape(size(this%variables(id + 1)%dimension_ids)))
+        do dimension = 1, size(variable_shape)
+            variable_shape(dimension) = int(this%dimensions( &
+                this%variables(id + 1)%dimension_ids(size(variable_shape) - dimension + 1) &
+                + 1)%length)
+        end do
+        if (size(start) /= size(variable_shape) .or. size(count) /= size(variable_shape)) then
+            call status%set(FORTIO_ESHAPE, "hyperslab rank does not match variable")
+            return
+        end if
+        if (any(start < 1) .or. any(count < 1)) then
+            call status%set(FORTIO_ESHAPE, "hyperslab start and count must be positive")
+            return
+        end if
+        if (any(start + count - 1 > variable_shape)) then
+            call status%set(FORTIO_ESHAPE, "hyperslab is outside variable")
+            return
+        end if
+        if (product(int(count, int64)) /= size(values, kind=int64)) then
+            call status%set(FORTIO_ESHAPE, "hyperslab count does not match value size")
+            return
+        end if
+        do linear = 1, size(values)
+            remaining = linear - 1
+            output_index = 1
+            stride = 1
+            do dimension = 1, size(variable_shape)
+                coordinate = mod(remaining, count(dimension))
+                remaining = remaining/count(dimension)
+                output_index = output_index + &
+                    (start(dimension) - 1 + coordinate)*stride
+                stride = stride*variable_shape(dimension)
+            end do
+            this%variables(id + 1)%values_r64(output_index) = values(linear)
+        end do
+    end subroutine classic_writer_put_r64_slice
+
     subroutine classic_writer_put_r64_2(this, id, values, status)
         class(classic_writer_t), intent(inout) :: this
         integer, intent(in) :: id
@@ -342,6 +416,8 @@ contains
         do i = 1, size(this%variables)
             call writer%seek(this%variables(i)%begin_offset + 1)
             select case (this%variables(i)%type_code)
+            case (NC_BYTE)
+                call writer%write_bytes(this%variables(i)%values_i8, status)
             case (NC_CHAR)
                 call write_text_value(writer, this%variables(i)%value_chars, status)
             case (NC_INT)
@@ -364,23 +440,11 @@ contains
         integer(int64), intent(in) :: count
         type(fortio_status_t), intent(inout) :: status
 
-        call status%clear()
-        prepare_put = this%opened
-        if (.not. prepare_put) then
-            call status%set(FORTIO_ESTATE, "data write requires an open file")
-            return
-        end if
-        prepare_put = id >= 0 .and. id < size(this%variables)
-        if (.not. prepare_put) then
-            call status%set(FORTIO_ENOTFOUND, "invalid variable ID")
-            return
-        end if
-        prepare_put = this%variables(id + 1)%type_code == type_code
-        if (.not. prepare_put) then
-            call status%set(FORTIO_ETYPE, "variable type does not match value")
-            return
-        end if
+        prepare_put = prepare_variable(this, id, type_code, status)
+        if (.not. prepare_put) return
         select case (type_code)
+        case (NC_BYTE)
+            prepare_put = size(this%variables(id + 1)%values_i8, kind=int64) == count
         case (NC_CHAR)
             prepare_put = len(this%variables(id + 1)%value_chars, kind=int64) == count
         case (NC_INT)
@@ -390,6 +454,28 @@ contains
         end select
         if (.not. prepare_put) call status%set(FORTIO_ESHAPE, "variable shape mismatch")
     end function prepare_put
+
+    logical function prepare_variable(this, id, type_code, status)
+        class(classic_writer_t), intent(in) :: this
+        integer, intent(in) :: id, type_code
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        prepare_variable = this%opened
+        if (.not. prepare_variable) then
+            call status%set(FORTIO_ESTATE, "data write requires an open file")
+            return
+        end if
+        prepare_variable = id >= 0
+        if (prepare_variable) prepare_variable = id < size(this%variables)
+        if (.not. prepare_variable) then
+            call status%set(FORTIO_ENOTFOUND, "invalid variable ID")
+            return
+        end if
+        prepare_variable = this%variables(id + 1)%type_code == type_code
+        if (.not. prepare_variable) &
+            call status%set(FORTIO_ETYPE, "variable type does not match value")
+    end function prepare_variable
 
     logical function prepare_attribute(this, id, status)
         class(classic_writer_t), intent(in) :: this
