@@ -6,6 +6,7 @@ program test_hdf5_tools_read
 
     integer(HID_T) :: file_id
     character(len=1024) :: fixture, generator, command
+    character(len=32) :: label
     integer :: scalar, command_status, lb1, lb2, ub1, ub2
     real(real64) :: x(3), matrix(3, 2)
 
@@ -22,6 +23,7 @@ program test_hdf5_tools_read
     call h5_get(file_id, "grid/Nt", scalar)
     call h5_get(file_id, "grid/x_values", x)
     call h5_get(file_id, "grid/matrix", matrix)
+    call h5_get(file_id, "grid/label", label)
     call h5_get_bounds(file_id, "grid/matrix", lb1, lb2, ub1, ub2)
     if (any([lb1, lb2, ub1, ub2] /= [-2, 5, 0, 6])) &
         error stop "hdf5_tools bounds differ from h5py oracle"
@@ -35,4 +37,5 @@ program test_hdf5_tools_read
         error stop "hdf5_tools vector differs from oracle"
     if (any(abs(matrix - reshape([1, 2, 3, 4, 5, 6], [3, 2])) > 1.0e-12_real64)) &
         error stop "hdf5_tools matrix differs from oracle"
+    if (trim(label) /= "stellarator") error stop "hdf5_tools string differs from oracle"
 end program test_hdf5_tools_read
