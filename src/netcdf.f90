@@ -1,7 +1,8 @@
 module netcdf
-    use, intrinsic :: iso_fortran_env, only: int32, real64
+    use, intrinsic :: iso_fortran_env, only: int32, int64, real64
     use fortio_netcdf_classic, only: classic_file_t, NC_BYTE, NC_CHAR, NC_SHORT, &
                                     NC_INT, NC_FLOAT, NC_DOUBLE
+    use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
                             FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE
     implicit none
@@ -14,6 +15,10 @@ module netcdf
     integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
     integer, parameter, public :: NF90_NOWRITE = 0
     integer, parameter, public :: NF90_WRITE = 1
+    integer, parameter, public :: NF90_CLOBBER = 0
+    integer, parameter, public :: NF90_NOCLOBBER = 4
+    integer, parameter, public :: NF90_NETCDF4 = 4096
+    integer, parameter, public :: NF90_UNLIMITED = 0
     integer, parameter, public :: NF90_BYTE = NC_BYTE
     integer, parameter, public :: NF90_CHAR = NC_CHAR
     integer, parameter, public :: NF90_SHORT = NC_SHORT
@@ -23,7 +28,9 @@ module netcdf
 
     integer, parameter :: MAX_OPEN_FILES = 32
     type(classic_file_t), save :: files(MAX_OPEN_FILES)
+    type(classic_writer_t), save :: writers(MAX_OPEN_FILES)
     logical, save :: in_use(MAX_OPEN_FILES) = .false.
+    logical, save :: writing(MAX_OPEN_FILES) = .false.
     character(len=512), save :: last_error = ""
 
     interface nf90_get_var
@@ -31,7 +38,17 @@ module netcdf
         module procedure get_r64_scalar, get_r64_rank1, get_r64_rank2, get_r64_rank3
     end interface nf90_get_var
 
-    public :: nf90_open, nf90_close, nf90_inq_varid, nf90_get_var, nf90_strerror
+    interface nf90_def_var
+        module procedure def_var_scalar, def_var_array
+    end interface nf90_def_var
+
+    interface nf90_put_var
+        module procedure put_i32_scalar, put_i32_rank1
+        module procedure put_r64_scalar, put_r64_rank1, put_r64_rank2, put_r64_rank3
+    end interface nf90_put_var
+
+    public :: nf90_open, nf90_create, nf90_close, nf90_def_dim, nf90_def_var
+    public :: nf90_enddef, nf90_inq_varid, nf90_get_var, nf90_put_var, nf90_strerror
 
 contains
 
@@ -64,6 +81,36 @@ contains
         ncid = slot
     end function nf90_open
 
+    integer function nf90_create(path, cmode, ncid) result(code)
+        character(len=*), intent(in) :: path
+        integer, intent(in) :: cmode
+        integer, intent(out) :: ncid
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        ncid = -1
+        if (iand(cmode, NF90_NETCDF4) /= 0) then
+            code = NF90_ENOTSUPPORT
+            last_error = "NetCDF-4 writer is not implemented"
+            return
+        end if
+        slot = first_free_slot()
+        if (slot == 0) then
+            code = NF90_EBADID
+            last_error = "fortio open-file table is full"
+            return
+        end if
+        call writers(slot)%create(path, status)
+        code = status%code
+        if (.not. status%ok()) then
+            last_error = status%message
+            return
+        end if
+        in_use(slot) = .true.
+        writing(slot) = .true.
+        ncid = slot
+    end function nf90_create
+
     integer function nf90_close(ncid) result(code)
         integer, intent(in) :: ncid
         type(fortio_status_t) :: status
@@ -72,11 +119,69 @@ contains
             code = NF90_EBADID
             return
         end if
-        call files(ncid)%close(status)
+        if (writing(ncid)) then
+            call writers(ncid)%close(status)
+        else
+            call files(ncid)%close(status)
+        end if
         in_use(ncid) = .false.
+        writing(ncid) = .false.
         code = status%code
         if (.not. status%ok()) last_error = status%message
     end function nf90_close
+
+    integer function nf90_def_dim(ncid, name, length, dimid) result(code)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer, intent(in) :: length
+        integer, intent(out) :: dimid
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            dimid = -1
+            return
+        end if
+        call writers(ncid)%define_dimension(name, int(length, int64), &
+                                            length == NF90_UNLIMITED, dimid, status)
+        code = finish_status(status)
+    end function nf90_def_dim
+
+    integer function def_var_scalar(ncid, name, type_code, varid) result(code)
+        integer, intent(in) :: ncid, type_code
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: varid
+
+        code = def_var_array(ncid, name, type_code, [integer ::], varid)
+    end function def_var_scalar
+
+    integer function def_var_array(ncid, name, type_code, dimension_ids, varid) result(code)
+        integer, intent(in) :: ncid, type_code
+        character(len=*), intent(in) :: name
+        integer, intent(in) :: dimension_ids(:)
+        integer, intent(out) :: varid
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            varid = -1
+            return
+        end if
+        call writers(ncid)%define_variable(name, type_code, dimension_ids, varid, status)
+        code = finish_status(status)
+    end function def_var_array
+
+    integer function nf90_enddef(ncid) result(code)
+        integer, intent(in) :: ncid
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%end_definition(status)
+        code = finish_status(status)
+    end function nf90_enddef
 
     integer function nf90_inq_varid(ncid, name, varid) result(code)
         integer, intent(in) :: ncid
@@ -207,6 +312,84 @@ contains
         code = finish_status(status)
     end function get_r64_rank3
 
+    integer function put_i32_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int32), intent(in) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_i32_scalar(varid, value, status)
+        code = finish_status(status)
+    end function put_i32_scalar
+
+    integer function put_i32_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int32), intent(in) :: value(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_i32_1(varid, value, status)
+        code = finish_status(status)
+    end function put_i32_rank1
+
+    integer function put_r64_scalar(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(in) :: value
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_r64_scalar(varid, value, status)
+        code = finish_status(status)
+    end function put_r64_scalar
+
+    integer function put_r64_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(in) :: value(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_r64_1(varid, value, status)
+        code = finish_status(status)
+    end function put_r64_rank1
+
+    integer function put_r64_rank2(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(in) :: value(:, :)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_r64_2(varid, value, status)
+        code = finish_status(status)
+    end function put_r64_rank2
+
+    integer function put_r64_rank3(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(in) :: value(:, :, :)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_r64_3(varid, value, status)
+        code = finish_status(status)
+    end function put_r64_rank3
+
     function nf90_strerror(code) result(message)
         integer, intent(in) :: code
         character(len=512) :: message
@@ -248,6 +431,13 @@ contains
         if (valid_id) valid_id = ncid <= MAX_OPEN_FILES
         if (valid_id) valid_id = in_use(ncid)
     end function valid_id
+
+    logical function valid_writer(ncid)
+        integer, intent(in) :: ncid
+
+        valid_writer = valid_id(ncid)
+        if (valid_writer) valid_writer = writing(ncid)
+    end function valid_writer
 
     logical function prepare_get(ncid, varid, status)
         integer, intent(in) :: ncid, varid
