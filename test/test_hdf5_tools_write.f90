@@ -1,16 +1,21 @@
 program test_hdf5_tools_write
-    use, intrinsic :: iso_fortran_env, only: real64
-    use hdf5_tools, only: HID_T, h5_add, h5_close, h5_close_group, h5_create, &
-                          h5_create_parent_groups, h5_define_group, h5_get, h5_isvalid, &
-                          h5_open, h5_open_group, h5overwrite
+    use, intrinsic :: iso_fortran_env, only: int64, real64
+    use hdf5_tools, only: HID_T, h5_add, h5_append, h5_close, h5_close_group, h5_create, &
+        h5_create_parent_groups, h5_define_group, h5_get, h5_isvalid, &
+        h5_open, h5_open_group, h5overwrite, h5_delete, &
+        h5_define_unlimited_array, h5_exists, h5_open_rw, h5_copy
+    use hdf5_tools_f2003, only: H5T_NATIVE_DOUBLE, H5T_NATIVE_INTEGER
     implicit none
 
-    integer(HID_T) :: file_id, group_id
+    integer(HID_T) :: file_id, group_id, copy_id, integer_stream_id, real_stream_id
     integer :: scalar, exit_status, unit
     integer :: matrix(2, 3)
     integer, allocatable :: absent(:)
     real(real64) :: cube(2, 2, 2, 2, 2)
     complex(real64) :: complex_vector(2)
+    integer :: integer_stream(3)
+    integer(int64) :: long_values(2)
+    real(real64) :: real_stream(3)
     character(len=512) :: command, dump_path, line, path
     character(len=32) :: label
     logical :: found_group, found_matrix, found_matrix_shape, found_cube
@@ -23,6 +28,7 @@ program test_hdf5_tools_write
     matrix = reshape([1, 2, 3, 4, 5, 6], shape(matrix))
     cube = reshape([(real(scalar, real64), scalar = 1, size(cube))], shape(cube))
     complex_vector = [cmplx(1.5, -2.0, real64), cmplx(3.0, 4.25, real64)]
+    long_values = [2_int64**40, -(2_int64**40)]
 
     call h5_create(trim(path), file_id)
     if (.not. h5_isvalid(file_id)) error stop "new HDF5 identifier is invalid"
@@ -33,6 +39,18 @@ program test_hdf5_tools_write
     call h5_add(file_id, "tolerance", 0.25_real64, accuracy=1.0e-8_real64)
     call h5_add(file_id, "label", "stellarator", "configuration label")
     call h5_add(file_id, "enabled", .true.)
+    call h5_add(file_id, "long_values", long_values, [1], [2])
+    call h5_add(file_id, "deleted", 123)
+    call h5_delete(file_id, "deleted")
+    call h5_define_unlimited_array(file_id, "integer_stream", H5T_NATIVE_INTEGER, &
+        integer_stream_id)
+    call h5_define_unlimited_array(file_id, "real_stream", H5T_NATIVE_DOUBLE, real_stream_id)
+    call h5_append(integer_stream_id, 4, 1)
+    call h5_append(integer_stream_id, 8, 2)
+    call h5_append(integer_stream_id, 12, 3)
+    call h5_append(real_stream_id, 1.5_real64, 1)
+    call h5_append(real_stream_id, 2.5_real64, 2)
+    call h5_append(real_stream_id, 3.5_real64, 3)
     call h5_create_parent_groups(file_id, "prepared/nested/")
     call h5_add(file_id, "prepared/nested/value", 9)
     call h5_add(file_id, "absent", absent, default=7)
@@ -54,6 +72,15 @@ program test_hdf5_tools_write
     if (.not. found_group) error stop "hdf5_tools logical round trip differs"
     call h5_get(file_id, "prepared/nested/value", scalar)
     if (scalar /= 9) error stop "prepared parent-group value differs"
+    call h5_get(file_id, "integer_stream", integer_stream)
+    call h5_get(file_id, "real_stream", real_stream)
+    call h5_get(file_id, "long_values", long_values)
+    if (any(long_values /= [2_int64**40, -(2_int64**40)])) &
+        error stop "64-bit integer round trip differs"
+    if (any(integer_stream /= [4, 8, 12])) error stop "integer append differs"
+    if (any(abs(real_stream - [1.5_real64, 2.5_real64, 3.5_real64]) > 1.0e-12_real64)) &
+        error stop "real append differs"
+    if (h5_exists(file_id, "deleted")) error stop "deleted dataset still exists"
     call h5_get(file_id, "absent", scalar)
     if (scalar /= 7) error stop "hdf5_tools unallocated default differs"
     call h5_get(file_id, "label", label)
@@ -61,6 +88,26 @@ program test_hdf5_tools_write
     call h5_open_group(file_id, "results", group_id)
     call h5_close_group(group_id)
     call h5_close(file_id)
+
+    call h5_open_rw(trim(path), file_id)
+    call h5_delete(file_id, "enabled")
+    call h5_add(file_id, "rw_value", 77)
+    call h5_close(file_id)
+    call h5_open(trim(path), file_id)
+    call h5_get(file_id, "answer", scalar)
+    if (scalar /= 43) error stop "open_rw did not preserve existing dataset"
+    if (h5_exists(file_id, "enabled")) error stop "open_rw delete failed"
+    call h5_get(file_id, "rw_value", scalar)
+    if (scalar /= 77) error stop "open_rw addition failed"
+    call h5_create(trim(path)//".copy", copy_id)
+    call h5_copy(file_id, "/", copy_id, "copied")
+    call h5_close(copy_id)
+    call h5_close(file_id)
+    call h5_open(trim(path)//".copy", copy_id)
+    call h5_get(copy_id, "copied/results/matrix", matrix)
+    if (any(matrix /= reshape([1, 2, 3, 4, 5, 6], shape(matrix)))) &
+        error stop "h5_copy values differ"
+    call h5_close(copy_id)
 
     dump_path = trim(path)//".dump"
     command = "h5dump "//trim(path)//" > "//trim(dump_path)
