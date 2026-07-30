@@ -65,6 +65,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/character-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
 
+    add_executable(test_netcdf_control test/test_netcdf_control.f90)
+    target_link_libraries(test_netcdf_control PRIVATE fortio)
+    add_test(NAME netcdf_control COMMAND test_netcdf_control)
+    add_test(NAME netcdf_control_oracle COMMAND ncdump -v after_redef control.nc)
+    set_tests_properties(netcdf_control_oracle PROPERTIES DEPENDS netcdf_control)
+
     add_executable(test_classic_write_oracle test/test_classic_write_oracle.f90)
     target_link_libraries(test_classic_write_oracle PRIVATE fortio)
     add_test(NAME classic_write COMMAND test_classic_write_oracle
