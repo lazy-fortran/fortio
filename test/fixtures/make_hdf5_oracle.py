@@ -18,3 +18,25 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
     )
     matrix.attrs["lbounds"] = np.array([-2, 5], dtype=np.int32)
     matrix.attrs["ubounds"] = np.array([0, 6], dtype=np.int32)
+    integer_ranks = handle.create_group("integer_ranks")
+    integer_ranks.create_dataset(
+        "int_matrix",
+        data=np.arange(1, 7, dtype=np.int32).reshape(2, 3),
+    )
+    integer_ranks.create_dataset(
+        "int_cube",
+        data=np.arange(1, 13, dtype=np.int32).reshape(2, 2, 3),
+    )
+    real_ranks = handle.create_group("real_ranks")
+    real_ranks.create_dataset(
+        "rank4",
+        data=np.arange(1, 13, dtype=np.float64).reshape(2, 1, 2, 3),
+    )
+    real_ranks.create_dataset(
+        "real_cube",
+        data=np.arange(1, 13, dtype=np.float64).reshape(2, 2, 3),
+    )
+    real_ranks.create_dataset(
+        "rank5",
+        data=np.arange(1, 9, dtype=np.float64).reshape(2, 1, 2, 1, 2),
+    )

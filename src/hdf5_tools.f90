@@ -19,9 +19,11 @@ module hdf5_tools
     interface h5_get
         module procedure h5_get_int
         module procedure h5_get_int_1
+        module procedure h5_get_int_2, h5_get_int_3
         module procedure h5_get_double_0
         module procedure h5_get_double_1
         module procedure h5_get_double_2
+        module procedure h5_get_double_3, h5_get_double_4, h5_get_double_5
         module procedure h5_get_string
     end interface h5_get
 
@@ -182,6 +184,36 @@ contains
         value = int(temporary, kind(value))
     end subroutine h5_get_int_1
 
+    subroutine h5_get_int_2(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(out) :: value(:, :)
+        type(fortio_status_t) :: status
+        integer(int32), allocatable :: temporary(:, :)
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = int(temporary, kind(value))
+    end subroutine h5_get_int_2
+
+    subroutine h5_get_int_3(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer, intent(out) :: value(:, :, :)
+        type(fortio_status_t) :: status
+        integer(int32), allocatable :: temporary(:, :, :)
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = int(temporary, kind(value))
+    end subroutine h5_get_int_3
+
     subroutine h5_get_double_0(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
@@ -223,6 +255,51 @@ contains
         if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
         value = temporary
     end subroutine h5_get_double_2
+
+    subroutine h5_get_double_3(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        real(real64), intent(out) :: value(:, :, :)
+        type(fortio_status_t) :: status
+        real(real64), allocatable :: temporary(:, :, :)
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_double_3
+
+    subroutine h5_get_double_4(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        real(real64), intent(out) :: value(:, :, :, :)
+        type(fortio_status_t) :: status
+        real(real64), allocatable :: temporary(:, :, :, :)
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_double_4
+
+    subroutine h5_get_double_5(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        real(real64), intent(out) :: value(:, :, :, :, :)
+        type(fortio_status_t) :: status
+        real(real64), allocatable :: temporary(:, :, :, :, :)
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        call require_ok(status)
+        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        value = temporary
+    end subroutine h5_get_double_5
 
     subroutine h5_get_string(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id

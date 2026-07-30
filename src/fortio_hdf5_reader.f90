@@ -48,10 +48,14 @@ module fortio_hdf5_reader
         procedure :: close => hdf5_close
         procedure :: read_i32_scalar => hdf5_read_i32_scalar
         procedure :: read_i32_1 => hdf5_read_i32_1
+        procedure :: read_i32_2 => hdf5_read_i32_2
+        procedure :: read_i32_3 => hdf5_read_i32_3
         procedure :: read_r64_scalar => hdf5_read_r64_scalar
         procedure :: read_r64_1 => hdf5_read_r64_1
         procedure :: read_r64_2 => hdf5_read_r64_2
         procedure :: read_r64_3 => hdf5_read_r64_3
+        procedure :: read_r64_4 => hdf5_read_r64_4
+        procedure :: read_r64_5 => hdf5_read_r64_5
         procedure :: read_i32_attribute => hdf5_read_i32_attribute
         procedure :: read_text_scalar => hdf5_read_text_scalar
     end type hdf5_file_t
@@ -113,7 +117,7 @@ contains
         type(fortio_status_t), intent(inout) :: status
         integer(int32), allocatable :: values(:)
 
-        call this%read_i32_1(path, values, status)
+        call read_i32_flat(this, path, values, status)
         if (.not. status%ok()) return
         if (size(values) /= 1) then
             call status%set(FORTIO_ESHAPE, "dataset is not scalar")
@@ -123,6 +127,63 @@ contains
     end subroutine hdf5_read_i32_scalar
 
     subroutine hdf5_read_i32_1(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        integer(int32), allocatable, intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 1) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 1")
+            return
+        end if
+        call read_i32_flat(this, path, values, status)
+    end subroutine hdf5_read_i32_1
+
+    subroutine hdf5_read_i32_2(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        integer(int32), allocatable, intent(out) :: values(:, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer(int32), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 2) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 2")
+            return
+        end if
+        call read_i32_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(2), dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_i32_2
+
+    subroutine hdf5_read_i32_3(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        integer(int32), allocatable, intent(out) :: values(:, :, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer(int32), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 3) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 3")
+            return
+        end if
+        call read_i32_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(3), dataset%dimensions(2), &
+                        dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_i32_3
+
+    subroutine read_i32_flat(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         integer(int32), allocatable, intent(out) :: values(:)
@@ -148,7 +209,7 @@ contains
             end if
             if (.not. status%ok()) return
         end do
-    end subroutine hdf5_read_i32_1
+    end subroutine read_i32_flat
 
     subroutine hdf5_read_i32_attribute(this, path, name, values, found, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -278,6 +339,49 @@ contains
                         dataset%dimensions(1)))
         values = reshape(flat, shape(values))
     end subroutine hdf5_read_r64_3
+
+    subroutine hdf5_read_r64_4(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), allocatable, intent(out) :: values(:, :, :, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        real(real64), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 4) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 4")
+            return
+        end if
+        call read_r64_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(4), dataset%dimensions(3), &
+                        dataset%dimensions(2), dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_r64_4
+
+    subroutine hdf5_read_r64_5(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), allocatable, intent(out) :: values(:, :, :, :, :)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        real(real64), allocatable :: flat(:)
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (size(dataset%dimensions) /= 5) then
+            call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 5")
+            return
+        end if
+        call read_r64_flat(this, path, flat, status)
+        if (.not. status%ok()) return
+        allocate(values(dataset%dimensions(5), dataset%dimensions(4), &
+                        dataset%dimensions(3), dataset%dimensions(2), &
+                        dataset%dimensions(1)))
+        values = reshape(flat, shape(values))
+    end subroutine hdf5_read_r64_5
 
     subroutine read_r64_flat(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
