@@ -21,6 +21,7 @@ module hdf5_tools
         integer :: type_code = 0
         integer :: used = 0
         integer :: row_count = 0
+        integer :: column_limit = 0
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
         real(real64), allocatable :: matrix_r64(:, :)
@@ -453,10 +454,6 @@ contains
         if (type_id /= H5T_NATIVE_DOUBLE) &
             error stop "fortio supports only double unlimited matrices"
         unlimited_dimension = findloc(dimensions, -1, dim=1)
-        if (unlimited_dimension /= 2) &
-            error stop "fortio unlimited matrix dimension must be the second dimension"
-        if (dimensions(1) < 1) error stop "fortio unlimited matrix row count must be positive"
-
         slot = require_mode(h5id, MODE_WRITE)
         root = root_slot(slot)
         slot = allocate_handle()
@@ -465,8 +462,16 @@ contains
         root_handle(slot) = .false.
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
         unlimited_buffers(slot)%type_code = UNLIMITED_DOUBLE
-        unlimited_buffers(slot)%row_count = dimensions(1)
-        allocate(unlimited_buffers(slot)%matrix_r64(dimensions(1), 16), source=0.0_real64)
+        if (unlimited_dimension == 1) then
+            if (dimensions(2) < 1) &
+                error stop "fortio unlimited matrix column count must be positive"
+            unlimited_buffers(slot)%column_limit = dimensions(2)
+        else
+            if (dimensions(1) < 1) &
+                error stop "fortio unlimited matrix row count must be positive"
+            unlimited_buffers(slot)%row_count = dimensions(1)
+            allocate(unlimited_buffers(slot)%matrix_r64(dimensions(1), 16), source=0.0_real64)
+        end if
         dataset_id = int(slot, HID_T)
     end subroutine h5_define_unlimited_matrix
 
@@ -521,11 +526,20 @@ contains
         integer :: slot
 
         slot = require_mode(dataset_id, MODE_UNLIMITED)
-        if (.not. allocated(unlimited_buffers(slot)%matrix_r64)) &
+        if (unlimited_buffers(slot)%row_count == 0 .and. &
+            unlimited_buffers(slot)%column_limit == 0) &
             error stop "array appended to non-matrix HDF5 dataset"
+        if (unlimited_buffers(slot)%row_count == 0) then
+            unlimited_buffers(slot)%row_count = size(values)
+            allocate(unlimited_buffers(slot)%matrix_r64(size(values), &
+                unlimited_buffers(slot)%column_limit), source=0.0_real64)
+        end if
         if (size(values) /= unlimited_buffers(slot)%row_count) &
             error stop "HDF5 appended array has the wrong size"
         if (position < 1) error stop "HDF5 append position must be positive"
+        if (unlimited_buffers(slot)%column_limit > 0 .and. &
+            position > unlimited_buffers(slot)%column_limit) &
+            error stop "HDF5 append position exceeds the fixed matrix dimension"
         if (position > size(unlimited_buffers(slot)%matrix_r64, 2)) then
             allocate(temporary(unlimited_buffers(slot)%row_count, &
                 max(position, 2*size(unlimited_buffers(slot)%matrix_r64, 2))), &
@@ -1471,6 +1485,7 @@ contains
         unlimited_buffers(slot)%type_code = 0
         unlimited_buffers(slot)%used = 0
         unlimited_buffers(slot)%row_count = 0
+        unlimited_buffers(slot)%column_limit = 0
         if (allocated(unlimited_buffers(slot)%values_i32)) &
             deallocate(unlimited_buffers(slot)%values_i32)
         if (allocated(unlimited_buffers(slot)%values_r64)) &
