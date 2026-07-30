@@ -2,7 +2,7 @@ module netcdf
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: decode_be_i32, decode_be_i64
     use fortio_netcdf_classic, only: classic_file_t, classic_dimension_t, &
-        classic_variable_t, NC_BYTE, NC_CHAR, NC_SHORT, &
+        classic_attribute_t, classic_variable_t, NC_BYTE, NC_CHAR, NC_SHORT, &
         NC_INT, NC_FLOAT, NC_DOUBLE
     use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
     use fortio_netcdf_writer, only: classic_writer_t
@@ -42,6 +42,7 @@ module netcdf
     type :: netcdf4_file_t
         type(hdf5_file_t) :: hdf5
         type(classic_dimension_t), allocatable :: dimensions(:)
+        type(classic_attribute_t), allocatable :: global_attributes(:)
         type(classic_variable_t), allocatable :: variables(:)
     end type netcdf4_file_t
     type(classic_file_t), save :: files(MAX_OPEN_FILES)
@@ -1025,6 +1026,9 @@ contains
         call status%clear()
         call file%hdf5%list_children("", names, group_flags, status)
         if (.not. status%ok()) return
+        call file%hdf5%get_attributes("", attributes, status)
+        if (.not. status%ok()) return
+        call convert_netcdf4_attributes(attributes, file%global_attributes)
         maximum_dimension_id = -1
         do i = 1, size(names)
             if (group_flags(i)) cycle
@@ -1118,10 +1122,103 @@ contains
             temporary(count + 1)%dimension_ids = int(attributes(i)%values_i32)
             exit
         end do
-        temporary(count + 1)%attribute_count = 0
-        allocate(temporary(count + 1)%attributes(0))
+        call convert_netcdf4_attributes(attributes, temporary(count + 1)%attributes)
+        temporary(count + 1)%attribute_count = size(temporary(count + 1)%attributes)
         call move_alloc(temporary, file%variables)
     end subroutine append_netcdf4_variable
+
+    subroutine convert_netcdf4_attributes(source, destination)
+        type(hdf5_attribute_t), intent(in) :: source(:)
+        type(classic_attribute_t), allocatable, intent(out) :: destination(:)
+        type(classic_attribute_t), allocatable :: temporary(:)
+        type(classic_attribute_t) :: attribute
+        integer :: count, i
+
+        allocate(destination(0))
+        do i = 1, size(source)
+            if (is_internal_netcdf4_attribute(source(i)%name)) cycle
+            call convert_netcdf4_attribute(source(i), attribute)
+            if (.not. allocated(attribute%bytes)) cycle
+            count = size(destination)
+            allocate(temporary(count + 1))
+            if (count > 0) temporary(:count) = destination
+            temporary(count + 1) = attribute
+            call move_alloc(temporary, destination)
+        end do
+    end subroutine convert_netcdf4_attributes
+
+    logical function is_internal_netcdf4_attribute(name)
+        character(len=*), intent(in) :: name
+
+        select case (trim(name))
+        case ("CLASS", "NAME", "DIMENSION_LIST", "REFERENCE_LIST", &
+                "_Netcdf4Dimid", "_Netcdf4Coordinates")
+            is_internal_netcdf4_attribute = .true.
+        case default
+            is_internal_netcdf4_attribute = .false.
+        end select
+    end function is_internal_netcdf4_attribute
+
+    subroutine convert_netcdf4_attribute(source, destination)
+        type(hdf5_attribute_t), intent(in) :: source
+        type(classic_attribute_t), intent(out) :: destination
+        integer(int64) :: bits
+        integer :: i
+
+        destination%name = source%name
+        if (allocated(source%value_text)) then
+            destination%type_code = NF90_CHAR
+            destination%element_count = len(source%value_text)
+            allocate(destination%bytes(destination%element_count))
+            do i = 1, destination%element_count
+                destination%bytes(i) = int(iachar(source%value_text(i:i)), int8)
+            end do
+        else if (allocated(source%values_i32)) then
+            destination%type_code = NF90_INT
+            destination%element_count = size(source%values_i32)
+            allocate(destination%bytes(4*destination%element_count))
+            do i = 1, destination%element_count
+                call encode_be_i32(source%values_i32(i), destination%bytes(4*i - 3:4*i))
+            end do
+        else if (allocated(source%values_i64)) then
+            destination%type_code = NF90_INT64
+            destination%element_count = size(source%values_i64)
+            allocate(destination%bytes(8*destination%element_count))
+            do i = 1, destination%element_count
+                call encode_be_i64(source%values_i64(i), destination%bytes(8*i - 7:8*i))
+            end do
+        else if (allocated(source%values_r64)) then
+            destination%type_code = NF90_DOUBLE
+            destination%element_count = size(source%values_r64)
+            allocate(destination%bytes(8*destination%element_count))
+            do i = 1, destination%element_count
+                bits = transfer(source%values_r64(i), bits)
+                call encode_be_i64(bits, destination%bytes(8*i - 7:8*i))
+            end do
+        end if
+    end subroutine convert_netcdf4_attribute
+
+    subroutine encode_be_i32(value, bytes)
+        integer(int32), intent(in) :: value
+        integer(int8), intent(out) :: bytes(4)
+        integer(int64) :: unsigned
+        integer :: i
+
+        unsigned = iand(int(value, int64), int(z'ffffffff', int64))
+        do i = 1, 4
+            bytes(i) = int(iand(shiftr(unsigned, 8*(4 - i)), 255_int64), int8)
+        end do
+    end subroutine encode_be_i32
+
+    subroutine encode_be_i64(value, bytes)
+        integer(int64), intent(in) :: value
+        integer(int8), intent(out) :: bytes(8)
+        integer :: i
+
+        do i = 1, 8
+            bytes(i) = int(iand(shiftr(value, 8*(8 - i)), 255_int64), int8)
+        end do
+    end subroutine encode_be_i64
 
     pure integer function netcdf4_type_code(type_class, element_size) result(type_code)
         integer, intent(in) :: type_class, element_size
@@ -1247,25 +1344,54 @@ contains
             return
         end if
         if (varid == NF90_GLOBAL) then
-            do i = 1, size(files(ncid)%global_attributes)
-                if (files(ncid)%global_attributes(i)%name == trim(name)) then
-                    attribute_id = i
-                    code = NF90_NOERR
-                    return
-                end if
-            end do
+            if (netcdf4_reading(ncid)) then
+                do i = 1, size(netcdf4_files(ncid)%global_attributes)
+                    if (netcdf4_files(ncid)%global_attributes(i)%name == trim(name)) then
+                        attribute_id = i
+                        code = NF90_NOERR
+                        return
+                    end if
+                end do
+            else
+                do i = 1, size(files(ncid)%global_attributes)
+                    if (files(ncid)%global_attributes(i)%name == trim(name)) then
+                        attribute_id = i
+                        code = NF90_NOERR
+                        return
+                    end if
+                end do
+            end if
         else
-            if (varid < 1 .or. varid > size(files(ncid)%variables)) then
+            if (varid < 1) then
                 code = NF90_ENOTVAR
                 return
             end if
-            do i = 1, size(files(ncid)%variables(varid)%attributes)
-                if (files(ncid)%variables(varid)%attributes(i)%name == trim(name)) then
-                    attribute_id = i
-                    code = NF90_NOERR
+            if (netcdf4_reading(ncid)) then
+                if (varid > size(netcdf4_files(ncid)%variables)) then
+                    code = NF90_ENOTVAR
                     return
                 end if
-            end do
+                do i = 1, size(netcdf4_files(ncid)%variables(varid)%attributes)
+                    if (netcdf4_files(ncid)%variables(varid)%attributes(i)%name == &
+                        trim(name)) then
+                        attribute_id = i
+                        code = NF90_NOERR
+                        return
+                    end if
+                end do
+            else
+                if (varid > size(files(ncid)%variables)) then
+                    code = NF90_ENOTVAR
+                    return
+                end if
+                do i = 1, size(files(ncid)%variables(varid)%attributes)
+                    if (files(ncid)%variables(varid)%attributes(i)%name == trim(name)) then
+                        attribute_id = i
+                        code = NF90_NOERR
+                        return
+                    end if
+                end do
+            end if
         end if
         code = NF90_ENOTATT
     end function find_attribute
@@ -1273,7 +1399,13 @@ contains
     integer function attribute_type(ncid, varid, attribute_id) result(type_code)
         integer, intent(in) :: ncid, varid, attribute_id
 
-        if (varid == NF90_GLOBAL) then
+        if (netcdf4_reading(ncid)) then
+            if (varid == NF90_GLOBAL) then
+                type_code = netcdf4_files(ncid)%global_attributes(attribute_id)%type_code
+            else
+                type_code = netcdf4_files(ncid)%variables(varid)%attributes(attribute_id)%type_code
+            end if
+        else if (varid == NF90_GLOBAL) then
             type_code = files(ncid)%global_attributes(attribute_id)%type_code
         else
             type_code = files(ncid)%variables(varid)%attributes(attribute_id)%type_code
@@ -1283,7 +1415,15 @@ contains
     integer function attribute_length(ncid, varid, attribute_id) result(element_count)
         integer, intent(in) :: ncid, varid, attribute_id
 
-        if (varid == NF90_GLOBAL) then
+        if (netcdf4_reading(ncid)) then
+            if (varid == NF90_GLOBAL) then
+                element_count = &
+                    netcdf4_files(ncid)%global_attributes(attribute_id)%element_count
+            else
+                element_count = &
+                    netcdf4_files(ncid)%variables(varid)%attributes(attribute_id)%element_count
+            end if
+        else if (varid == NF90_GLOBAL) then
             element_count = files(ncid)%global_attributes(attribute_id)%element_count
         else
             element_count = files(ncid)%variables(varid)%attributes(attribute_id)%element_count
@@ -1293,7 +1433,15 @@ contains
     integer function attribute_byte(ncid, varid, attribute_id, position) result(value)
         integer, intent(in) :: ncid, varid, attribute_id, position
 
-        if (varid == NF90_GLOBAL) then
+        if (netcdf4_reading(ncid)) then
+            if (varid == NF90_GLOBAL) then
+                value = iand(int( &
+                    netcdf4_files(ncid)%global_attributes(attribute_id)%bytes(position)), 255)
+            else
+                value = iand(int(netcdf4_files(ncid)%variables(varid)% &
+                    attributes(attribute_id)%bytes(position)), 255)
+            end if
+        else if (varid == NF90_GLOBAL) then
             value = iand(int(files(ncid)%global_attributes(attribute_id)%bytes(position)), 255)
         else
             value = iand(int(files(ncid)%variables(varid)%attributes(attribute_id)%bytes(position)), 255)
