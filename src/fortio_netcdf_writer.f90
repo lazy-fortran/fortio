@@ -60,6 +60,7 @@ module fortio_netcdf_writer
         procedure :: put_r64_1 => classic_writer_put_r64_1
         procedure :: put_r64_2 => classic_writer_put_r64_2
         procedure :: put_r64_3 => classic_writer_put_r64_3
+        procedure :: put_r64_4 => classic_writer_put_r64_4
         procedure :: close => classic_writer_close
     end type classic_writer_t
 
@@ -311,6 +312,15 @@ contains
 
         call this%put_r64_1(id, reshape(values, [size(values)]), status)
     end subroutine classic_writer_put_r64_3
+
+    subroutine classic_writer_put_r64_4(this, id, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        real(real64), intent(in) :: values(:, :, :, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%put_r64_1(id, reshape(values, [size(values)]), status)
+    end subroutine classic_writer_put_r64_4
 
     subroutine classic_writer_close(this, status)
         class(classic_writer_t), intent(inout) :: this
