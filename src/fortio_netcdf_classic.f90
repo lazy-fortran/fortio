@@ -2,7 +2,7 @@ module fortio_netcdf_classic
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: byte_reader_t
     use fortio_status, only: fortio_status_t, FORTIO_EFORMAT, FORTIO_ENOTFOUND, &
-                            FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_ETYPE
+        FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_ETYPE
     implicit none
     private
 
@@ -306,9 +306,9 @@ contains
     subroutine classic_read_r64_2(this, name, values, status)
         class(classic_file_t), intent(inout) :: this
         character(len=*), intent(in) :: name
-        real(real64), allocatable, intent(out) :: values(:, :)
+        real(real64), allocatable, target, intent(out) :: values(:, :)
         type(fortio_status_t), intent(inout) :: status
-        real(real64), allocatable :: flat(:)
+        real(real64), pointer :: flat(:)
         integer(int64), allocatable :: shape(:)
         integer :: variable_id
 
@@ -322,10 +322,9 @@ contains
             call status%set(FORTIO_ESHAPE, "variable rank does not match rank 2")
             return
         end if
-        call read_r64_flat(this, name, flat, status)
-        if (.not. status%ok()) return
         allocate(values(shape(1), shape(2)))
-        values = reshape(flat, [int(shape(1)), int(shape(2))])
+        flat(1:size(values)) => values
+        call read_r64_values(this, variable_id, flat, status)
     end subroutine classic_read_r64_2
 
     subroutine classic_read_r64_3(this, name, values, status)
@@ -383,9 +382,7 @@ contains
         character(len=*), intent(in) :: name
         real(real64), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: variable_id, i
-        real(real32) :: value_r32
-        integer(int32) :: value_i32
+        integer :: variable_id
 
         call status%clear()
         variable_id = this%variable_id(name)
@@ -394,14 +391,24 @@ contains
             return
         end if
         allocate(values(this%variables(variable_id)%element_count))
+        call read_r64_values(this, variable_id, values, status)
+    end subroutine read_r64_flat
+
+    subroutine read_r64_values(this, variable_id, values, status)
+        class(classic_file_t), intent(inout) :: this
+        integer, intent(in) :: variable_id
+        real(real64), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+        real(real32) :: value_r32
+        integer(int32) :: value_i32
+
+        call status%clear()
         call seek_variable(this, variable_id, status)
         if (.not. status%ok()) return
         select case (this%variables(variable_id)%type_code)
         case (NC_DOUBLE)
-            do i = 1, size(values)
-                call this%reader%read_be_r64(values(i), status)
-                if (.not. status%ok()) return
-            end do
+            call this%reader%read_be_r64_array(values, status)
         case (NC_FLOAT)
             do i = 1, size(values)
                 call this%reader%read_be_r32(value_r32, status)
@@ -417,7 +424,7 @@ contains
         case default
             call status%set(FORTIO_ETYPE, "variable cannot be converted to real64")
         end select
-    end subroutine read_r64_flat
+    end subroutine read_r64_values
 
     subroutine read_dimensions(this, status)
         class(classic_file_t), intent(inout) :: this
@@ -598,7 +605,7 @@ contains
         call status%clear()
         if (this%variables(variable_id)%record_variable .and. this%record_count > 1) then
             call status%set(FORTIO_ENOTSUP, &
-                            "multi-record variables require strided record reads")
+                "multi-record variables require strided record reads")
             return
         end if
         call this%reader%seek(this%variables(variable_id)%begin_offset + 1_int64)

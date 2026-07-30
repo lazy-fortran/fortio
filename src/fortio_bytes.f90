@@ -17,6 +17,7 @@ module fortio_bytes
         procedure :: read_be_i64 => reader_read_be_i64
         procedure :: read_be_r32 => reader_read_be_r32
         procedure :: read_be_r64 => reader_read_be_r64
+        procedure :: read_be_r64_array => reader_read_be_r64_array
         procedure :: read_le_i16 => reader_read_le_i16
         procedure :: read_le_i32 => reader_read_le_i32
         procedure :: read_le_i64 => reader_read_le_i64
@@ -38,6 +39,7 @@ module fortio_bytes
         procedure :: write_be_i64 => writer_write_be_i64
         procedure :: write_be_r32 => writer_write_be_r32
         procedure :: write_be_r64 => writer_write_be_r64
+        procedure :: write_be_r64_array => writer_write_be_r64_array
         procedure :: write_le_i32 => writer_write_le_i32
         procedure :: write_le_i64 => writer_write_le_i64
         procedure :: write_le_r32 => writer_write_le_r32
@@ -58,7 +60,8 @@ contains
 
         call status%clear()
         open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-            action="write", status="replace", iostat=io_status, iomsg=io_message)
+            action="write", status="replace", convert="big_endian", &
+            iostat=io_status, iomsg=io_message)
         if (io_status /= 0) then
             call status%set(FORTIO_EIO, trim(io_message))
             this%unit = -1
@@ -165,6 +168,22 @@ contains
         call this%write_be_i64(transfer(value, 0_int64), status)
     end subroutine writer_write_be_r64
 
+    subroutine writer_write_be_r64_array(this, values, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real64), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: io_status
+        character(len=512) :: io_message
+
+        call status%clear()
+        write(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
+        if (io_status /= 0) then
+            call status%set(FORTIO_EIO, trim(io_message))
+            return
+        end if
+        this%position = this%position + 8_int64*size(values, kind=int64)
+    end subroutine writer_write_be_r64_array
+
     subroutine writer_write_le_i32(this, value, status)
         class(byte_writer_t), intent(inout) :: this
         integer(int32), intent(in) :: value
@@ -216,7 +235,8 @@ contains
 
         call status%clear()
         open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-            action="read", status="old", iostat=io_status, iomsg=io_message)
+            action="read", status="old", convert="big_endian", &
+            iostat=io_status, iomsg=io_message)
         if (io_status /= 0) then
             call status%set(FORTIO_EIO, trim(io_message))
             this%unit = -1
@@ -327,6 +347,22 @@ contains
         if (.not. status%ok()) return
         value = transfer(bits, value)
     end subroutine reader_read_be_r64
+
+    subroutine reader_read_be_r64_array(this, values, status)
+        class(byte_reader_t), intent(inout) :: this
+        real(real64), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: io_status
+        character(len=512) :: io_message
+
+        call status%clear()
+        read(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
+        if (io_status /= 0) then
+            call status%set(FORTIO_EIO, trim(io_message))
+            return
+        end if
+        this%position = this%position + 8_int64*size(values, kind=int64)
+    end subroutine reader_read_be_r64_array
 
     subroutine reader_read_le_i16(this, value, status)
         class(byte_reader_t), intent(inout) :: this
