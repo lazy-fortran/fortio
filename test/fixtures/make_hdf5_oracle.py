@@ -11,7 +11,9 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
         "x_values",
         data=np.array([1.25, -2.5, 4.75], dtype=np.float32),
     )
-    grid.create_dataset(
+    matrix = grid.create_dataset(
         "matrix",
         data=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64),
     )
+    matrix.attrs["lbounds"] = np.array([-2, 5], dtype=np.int32)
+    matrix.attrs["ubounds"] = np.array([0, 6], dtype=np.int32)
