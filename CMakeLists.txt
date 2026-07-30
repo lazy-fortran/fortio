@@ -90,6 +90,11 @@ if(BUILD_TESTING)
     target_link_libraries(test_hdf5_write_oracle PRIVATE fortio)
     add_test(NAME hdf5_write_oracle COMMAND test_hdf5_write_oracle
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.h5")
+
+    add_executable(test_hdf5_tools_write test/test_hdf5_tools_write.f90)
+    target_link_libraries(test_hdf5_tools_write PRIVATE fortio)
+    add_test(NAME hdf5_tools_write COMMAND test_hdf5_tools_write
+        "${CMAKE_CURRENT_BINARY_DIR}/hdf5-tools-written.h5")
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets
