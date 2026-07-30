@@ -25,9 +25,10 @@ module netcdf
     integer, parameter, public :: NF90_WRITE = 1
     integer, parameter, public :: NF90_CLOBBER = 0
     integer, parameter, public :: NF90_NOCLOBBER = 4
+    integer, parameter, public :: NF90_CLASSIC_MODEL = 256
     integer, parameter, public :: NF90_NETCDF4 = 4096
     integer, parameter, public :: NF90_UNLIMITED = 0
-    integer, parameter, public :: NF90_GLOBAL = -1
+    integer, parameter, public :: NF90_GLOBAL = 0
     integer, parameter, public :: NF90_MAX_NAME = 256
     integer, parameter, public :: NF90_MAX_VAR_DIMS = 1024
     integer, parameter, public :: NF90_BYTE = NC_BYTE
@@ -51,6 +52,7 @@ module netcdf
     type(classic_writer_t), save :: writers(MAX_OPEN_FILES)
     logical, save :: in_use(MAX_OPEN_FILES) = .false.
     logical, save :: writing(MAX_OPEN_FILES) = .false.
+    logical, save :: writing_netcdf4(MAX_OPEN_FILES) = .false.
     logical, save :: netcdf4_reading(MAX_OPEN_FILES) = .false.
 
     interface nf90_get_var
@@ -156,6 +158,7 @@ contains
             return
         end if
         writing(slot) = .true.
+        writing_netcdf4(slot) = iand(cmode, NF90_NETCDF4) /= 0
         ncid = slot
     end function nf90_create
 
@@ -168,7 +171,11 @@ contains
             return
         end if
         if (writing(ncid)) then
-            call writers(ncid)%close(status)
+            if (writing_netcdf4(ncid)) then
+                call writers(ncid)%close_netcdf4(status)
+            else
+                call writers(ncid)%close(status)
+            end if
         else if (netcdf4_reading(ncid)) then
             call netcdf4_files(ncid)%hdf5%close(status)
             if (allocated(netcdf4_files(ncid)%dimensions)) &
@@ -179,6 +186,7 @@ contains
             call files(ncid)%close(status)
         end if
         writing(ncid) = .false.
+        writing_netcdf4(ncid) = .false.
         netcdf4_reading(ncid) = .false.
         call release_slot(ncid)
         code = status%code
@@ -199,6 +207,7 @@ contains
         call writers(ncid)%define_dimension(name, int(length, int64), &
             length == NF90_UNLIMITED, dimid, status)
         code = finish_status(status)
+        if (code == NF90_NOERR) dimid = dimid + 1
     end function nf90_def_dim
 
     integer function def_var_scalar(ncid, name, type_code, varid) result(code)
@@ -230,19 +239,22 @@ contains
             varid = -1
             return
         end if
-        call writers(ncid)%define_variable(name, type_code, dimension_ids, varid, status)
+        call writers(ncid)%define_variable(name, type_code, dimension_ids - 1, &
+            varid, status)
         code = finish_status(status)
+        if (code == NF90_NOERR) varid = varid + 1
     end function def_var_array
 
     integer function nf90_def_var_deflate(ncid, varid, shuffle, deflate, &
             deflate_level) result(code)
         integer, intent(in) :: ncid, varid, shuffle, deflate, deflate_level
+        type(fortio_status_t) :: status
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
             return
         end if
-        if (varid < 0 .or. varid >= size(writers(ncid)%variables)) then
+        if (varid < 1 .or. varid > size(writers(ncid)%variables)) then
             code = NF90_ENOTVAR
             return
         end if
@@ -254,9 +266,13 @@ contains
             code = NF90_EINVAL
             return
         end if
-        ! The current classic encoder has no representation for filters. Accept
-        ! the NetCDF-4 storage hint without changing the logical data model.
-        code = NF90_NOERR
+        if (.not. writing_netcdf4(ncid)) then
+            code = NF90_ENOTSUPPORT
+            return
+        end if
+        call writers(ncid)%set_deflate(varid - 1, shuffle == 1, deflate == 1, &
+            deflate_level, status)
+        code = finish_status(status)
     end function nf90_def_var_deflate
 
     integer function nf90_enddef(ncid) result(code)
@@ -571,12 +587,14 @@ contains
         integer, intent(in) :: ncid, varid
         character(len=*), intent(in) :: name, value
         type(fortio_status_t) :: status
+        integer :: writer_varid
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_attribute_text(varid, name, value, status)
+        writer_varid = compatibility_writer_varid(varid)
+        call writers(ncid)%put_attribute_text(writer_varid, name, value, status)
         code = finish_status(status)
     end function put_att_text
 
@@ -593,12 +611,14 @@ contains
         character(len=*), intent(in) :: name
         integer(int32), intent(in) :: values(:)
         type(fortio_status_t) :: status
+        integer :: writer_varid
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_attribute_i32(varid, name, values, status)
+        writer_varid = compatibility_writer_varid(varid)
+        call writers(ncid)%put_attribute_i32(writer_varid, name, values, status)
         code = finish_status(status)
     end function put_att_i32_rank1
 
@@ -607,6 +627,7 @@ contains
         character(len=*), intent(in) :: name
         integer(int64), intent(in) :: value
         type(fortio_status_t) :: status
+        integer :: writer_varid
 
         if (value < -9007199254740992_int64 .or. value > 9007199254740992_int64) then
             code = NF90_EINVAL
@@ -616,7 +637,9 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_attribute_r64(varid, name, [real(value, real64)], status)
+        writer_varid = compatibility_writer_varid(varid)
+        call writers(ncid)%put_attribute_r64(writer_varid, name, &
+            [real(value, real64)], status)
         code = finish_status(status)
     end function put_att_i64_scalar
 
@@ -633,14 +656,23 @@ contains
         character(len=*), intent(in) :: name
         real(real64), intent(in) :: values(:)
         type(fortio_status_t) :: status
+        integer :: writer_varid
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_attribute_r64(varid, name, values, status)
+        writer_varid = compatibility_writer_varid(varid)
+        call writers(ncid)%put_attribute_r64(writer_varid, name, values, status)
         code = finish_status(status)
     end function put_att_r64_rank1
+
+    pure integer function compatibility_writer_varid(varid) result(writer_varid)
+        integer, intent(in) :: varid
+
+        writer_varid = varid - 1
+        if (varid == NF90_GLOBAL) writer_varid = -1
+    end function compatibility_writer_varid
 
     integer function get_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
@@ -881,7 +913,8 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_i32_scalar(varid, value, status)
+        call writers(ncid)%put_i32_scalar(compatibility_writer_varid(varid), &
+            value, status)
         code = finish_status(status)
     end function put_i32_scalar
 
@@ -894,7 +927,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_i8_1(varid, value, status)
+        call writers(ncid)%put_i8_1(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_i8_rank1
 
@@ -907,7 +940,8 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_char_scalar(varid, value, status)
+        call writers(ncid)%put_char_scalar(compatibility_writer_varid(varid), &
+            value, status)
         code = finish_status(status)
     end function put_char_scalar
 
@@ -920,7 +954,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_char_1(varid, value, status)
+        call writers(ncid)%put_char_1(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_char_rank1
 
@@ -933,7 +967,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_i32_1(varid, value, status)
+        call writers(ncid)%put_i32_1(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_i32_rank1
 
@@ -946,7 +980,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_i32_2(varid, value, status)
+        call writers(ncid)%put_i32_2(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_i32_rank2
 
@@ -959,7 +993,8 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_r64_scalar(varid, value, status)
+        call writers(ncid)%put_r64_scalar(compatibility_writer_varid(varid), &
+            value, status)
         code = finish_status(status)
     end function put_r64_scalar
 
@@ -978,9 +1013,11 @@ contains
             return
         end if
         if (present(start)) then
-            call writers(ncid)%put_r64_slice(varid, value, start, count, status)
+            call writers(ncid)%put_r64_slice(compatibility_writer_varid(varid), &
+                value, start, count, status)
         else
-            call writers(ncid)%put_r64_1(varid, value, status)
+            call writers(ncid)%put_r64_1(compatibility_writer_varid(varid), &
+                value, status)
         end if
         code = finish_status(status)
     end function put_r64_rank1
@@ -994,7 +1031,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_r64_2(varid, value, status)
+        call writers(ncid)%put_r64_2(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_r64_rank2
 
@@ -1007,7 +1044,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_r64_3(varid, value, status)
+        call writers(ncid)%put_r64_3(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_r64_rank3
 
@@ -1020,7 +1057,7 @@ contains
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_r64_4(varid, value, status)
+        call writers(ncid)%put_r64_4(compatibility_writer_varid(varid), value, status)
         code = finish_status(status)
     end function put_r64_rank4
 
@@ -1085,7 +1122,7 @@ contains
         varid = -1
         do i = 1, size(writers(ncid)%variables)
             if (writers(ncid)%variables(i)%name == trim(name)) then
-                varid = i - 1
+                varid = i
                 return
             end if
         end do

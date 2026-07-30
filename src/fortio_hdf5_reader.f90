@@ -1,6 +1,8 @@
 module fortio_hdf5_reader
+    use, intrinsic :: iso_c_binding, only: c_f_pointer, c_loc
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_bytes, only: byte_reader_t
+    use fortio_deflate, only: deflate_uncompress, unshuffle_bytes, unshuffle_r64
     use fortio_status, only: fortio_status_t, FORTIO_EFORMAT, FORTIO_ENOTFOUND, &
         FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_ETYPE
     implicit none
@@ -10,6 +12,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_MSG_LINK_INFO = 2
     integer, parameter :: H5_MSG_LINK = 6
     integer, parameter :: H5_MSG_LAYOUT = 8
+    integer, parameter :: H5_MSG_FILTER_PIPELINE = 11
     integer, parameter :: H5_MSG_ATTRIBUTE = 12
     integer, parameter :: H5_MSG_CONTINUATION = 16
     integer, parameter :: H5_TYPE_INTEGER = 0
@@ -17,6 +20,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_TYPE_STRING = 3
     integer, parameter :: H5_TYPE_COMPOUND = 6
     integer, parameter :: H5_LAYOUT_CONTIGUOUS = 1
+    integer, parameter :: H5_LAYOUT_CHUNKED = 2
 
     type :: hdf5_link_t
         character(len=:), allocatable :: name
@@ -38,6 +42,9 @@ module fortio_hdf5_reader
         logical :: little_endian = .true.
         integer(int64) :: data_address = -1_int64
         integer(int64) :: data_size = 0_int64
+        integer :: filter_mask = 0
+        integer :: shuffle_index = -1
+        integer :: deflate_index = -1
         type(hdf5_attribute_t), allocatable :: attributes(:)
     end type hdf5_dataset_t
 
@@ -309,6 +316,7 @@ contains
         integer(int32), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_dataset_t) :: dataset
+        integer(int8), allocatable :: bytes(:)
         integer(int64) :: count
         integer :: i
 
@@ -320,16 +328,31 @@ contains
         end if
         count = product(dataset%dimensions)
         allocate(values(count))
-        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        call read_dataset_bytes(this, dataset, bytes, status)
+        if (.not. status%ok()) return
         do i = 1, size(values)
-            if (dataset%little_endian) then
-                call this%reader%read_le_i32(values(i), status)
-            else
-                call this%reader%read_be_i32(values(i), status)
-            end if
-            if (.not. status%ok()) return
+            values(i) = decode_i32(bytes(4*i - 3:4*i), dataset%little_endian)
         end do
     end subroutine read_i32_flat
+
+    pure integer(int32) function decode_i32(bytes, little_endian) result(value)
+        integer(int8), intent(in) :: bytes(4)
+        logical, intent(in) :: little_endian
+        integer(int64) :: bits
+        integer :: i, position
+
+        bits = 0_int64
+        do i = 1, 4
+            if (little_endian) then
+                position = i - 1
+            else
+                position = 4 - i
+            end if
+            bits = ior(bits, shiftl(iand(int(bytes(i), int64), 255_int64), &
+                8*position))
+        end do
+        value = int(bits, int32)
+    end function decode_i32
 
     subroutine hdf5_read_i32_attribute(this, path, name, values, found, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -625,36 +648,161 @@ contains
     subroutine read_r64_values(this, dataset, values, status)
         class(hdf5_file_t), intent(inout) :: this
         type(hdf5_dataset_t), intent(in) :: dataset
-        real(real64), intent(out) :: values(:)
+        real(real64), contiguous, target, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         real(real32) :: value_r32
+        integer(int8), allocatable :: bytes(:), inflated(:), ordered(:), stored(:)
+        integer(int8), pointer :: direct_bytes(:)
+        logical :: apply_deflate, apply_shuffle, native_little_endian
         integer :: i
 
-        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        native_little_endian = host_is_little_endian()
+        apply_deflate = filter_is_applied(dataset%deflate_index, dataset%filter_mask)
+        apply_shuffle = filter_is_applied(dataset%shuffle_index, dataset%filter_mask)
+        if (dataset%element_size == 8) then
+            if (dataset%little_endian .eqv. native_little_endian) then
+                if (apply_deflate) then
+                    if (apply_shuffle) then
+                        allocate(stored(dataset%data_size))
+                        call this%reader%seek( &
+                            this%base_address + dataset%data_address + 1)
+                        call this%reader%read_bytes(stored, status)
+                        if (.not. status%ok()) return
+                        call deflate_uncompress(stored, 8_int64*size(values), inflated, &
+                            status)
+                        if (.not. status%ok()) return
+                        call unshuffle_r64(inflated, values)
+                        return
+                    end if
+                end if
+                if (.not. apply_deflate) then
+                    if (.not. apply_shuffle) then
+                        call c_f_pointer(c_loc(values), direct_bytes, [8*size(values)])
+                        call this%reader%seek(this%base_address + dataset%data_address + 1)
+                        call this%reader%read_bytes(direct_bytes, status)
+                        return
+                    end if
+                end if
+            end if
+        end if
+        call read_dataset_bytes(this, dataset, bytes, status)
+        if (.not. status%ok()) return
         select case (dataset%element_size)
         case (8)
-            if (dataset%little_endian) then
-                call this%reader%read_le_r64_array(values, status)
+            if (dataset%little_endian .eqv. native_little_endian) then
+                values = transfer(bytes, values)
             else
-                do i = 1, size(values)
-                    call this%reader%read_be_r64(values(i), status)
-                    if (.not. status%ok()) return
-                end do
+                ordered = bytes
+                call reverse_element_bytes(ordered, 8)
+                values = transfer(ordered, values)
             end if
         case (4)
-            do i = 1, size(values)
-                if (dataset%little_endian) then
-                    call this%reader%read_le_r32(value_r32, status)
-                else
-                    call this%reader%read_be_r32(value_r32, status)
-                end if
-                if (.not. status%ok()) return
-                values(i) = real(value_r32, real64)
-            end do
+            if (dataset%little_endian .eqv. native_little_endian) then
+                do i = 1, size(values)
+                    value_r32 = transfer(bytes(4*i - 3:4*i), value_r32)
+                    values(i) = real(value_r32, real64)
+                end do
+            else
+                ordered = bytes
+                call reverse_element_bytes(ordered, 4)
+                do i = 1, size(values)
+                    value_r32 = transfer(ordered(4*i - 3:4*i), value_r32)
+                    values(i) = real(value_r32, real64)
+                end do
+            end if
         case default
             call status%set(FORTIO_ETYPE, "floating-point width is not supported")
         end select
     end subroutine read_r64_values
+
+    pure logical function host_is_little_endian()
+        integer(int8) :: bytes(4)
+
+        bytes = transfer(1_int32, bytes)
+        host_is_little_endian = bytes(1) == 1_int8
+    end function host_is_little_endian
+
+    pure subroutine reverse_element_bytes(bytes, element_size)
+        integer(int8), intent(inout) :: bytes(:)
+        integer, intent(in) :: element_size
+        integer(int8) :: temporary
+        integer :: element, first, left, right
+
+        do element = 1, size(bytes)/element_size
+            first = (element - 1)*element_size
+            do left = 1, element_size/2
+                right = element_size - left + 1
+                temporary = bytes(first + left)
+                bytes(first + left) = bytes(first + right)
+                bytes(first + right) = temporary
+            end do
+        end do
+    end subroutine reverse_element_bytes
+
+    subroutine read_dataset_bytes(this, dataset, bytes, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_dataset_t), intent(in) :: dataset
+        integer(int8), allocatable, intent(out) :: bytes(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: stored(:), inflated(:)
+        integer(int64) :: expected_size
+        logical :: apply_deflate, apply_shuffle
+
+        call status%clear()
+        allocate(stored(dataset%data_size))
+        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        call this%reader%read_bytes(stored, status)
+        if (.not. status%ok()) return
+        apply_deflate = filter_is_applied(dataset%deflate_index, dataset%filter_mask)
+        apply_shuffle = filter_is_applied(dataset%shuffle_index, dataset%filter_mask)
+        expected_size = product(dataset%dimensions)*dataset%element_size
+        if (size(dataset%dimensions) == 0) expected_size = dataset%element_size
+        if (apply_deflate) then
+            call deflate_uncompress(stored, expected_size, inflated, status)
+            if (.not. status%ok()) return
+        else
+            inflated = stored
+        end if
+        if (apply_shuffle) then
+            call unshuffle_bytes(inflated, dataset%element_size, bytes)
+        else
+            bytes = inflated
+        end if
+    end subroutine read_dataset_bytes
+
+    logical function filter_is_applied(index, mask)
+        integer, intent(in) :: index, mask
+
+        filter_is_applied = .false.
+        if (index < 0) return
+        filter_is_applied = .not. btest(mask, index)
+    end function filter_is_applied
+
+    pure real(real64) function decode_r64(bytes, little_endian) result(value)
+        integer(int8), intent(in) :: bytes(8)
+        logical, intent(in) :: little_endian
+        integer(int8) :: ordered(8)
+
+        if (little_endian) then
+            ordered = bytes
+        else
+            ordered = bytes(8:1:-1)
+        end if
+        value = transfer(ordered, value)
+    end function decode_r64
+
+    pure real(real32) function decode_r32(bytes, little_endian) result(value)
+        integer(int8), intent(in) :: bytes(4)
+        logical, intent(in) :: little_endian
+        integer(int8) :: ordered(4)
+
+        if (little_endian) then
+            ordered = bytes
+        else
+            ordered = bytes(4:1:-1)
+        end if
+        value = transfer(ordered, value)
+    end function decode_r32
 
     subroutine hdf5_read_c64_1(this, path, values, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -944,6 +1092,8 @@ contains
                 if (.not. want_links) call parse_datatype_message(this, dataset, status)
             case (H5_MSG_LAYOUT)
                 if (.not. want_links) call parse_layout_message(this, dataset, status)
+            case (H5_MSG_FILTER_PIPELINE)
+                if (.not. want_links) call parse_filter_message(this, dataset, status)
             case (H5_MSG_ATTRIBUTE)
                 if (.not. want_links) call parse_attribute_message(this, dataset, status)
             case (H5_MSG_CONTINUATION)
@@ -1286,20 +1436,145 @@ contains
         class(hdf5_file_t), intent(inout) :: this
         type(hdf5_dataset_t), intent(inout) :: dataset
         type(fortio_status_t), intent(inout) :: status
-        integer(int8) :: version_byte, class_byte
+        integer(int8) :: version_byte, class_byte, flags_byte, rank_byte
+        integer(int8) :: width_byte, index_byte
+        integer(int32) :: mask
+        integer(int64) :: ignored
+        integer :: i, version, layout_class, rank, width
 
         call this%reader%read_i8(version_byte, status)
         call this%reader%read_i8(class_byte, status)
         if (.not. status%ok()) return
-        if ((byte_value(version_byte) /= 3 .and. byte_value(version_byte) /= 4) .or. &
-            byte_value(class_byte) /= H5_LAYOUT_CONTIGUOUS) then
-            call status%set(FORTIO_ENOTSUP, &
-                "only contiguous HDF5 layout versions 3 and 4 are supported")
+        version = byte_value(version_byte)
+        layout_class = byte_value(class_byte)
+        if ((version == 3 .or. version == 4) .and. &
+            layout_class == H5_LAYOUT_CONTIGUOUS) then
+            call this%reader%read_le_i64(dataset%data_address, status)
+            call this%reader%read_le_i64(dataset%data_size, status)
             return
         end if
-        call this%reader%read_le_i64(dataset%data_address, status)
-        call this%reader%read_le_i64(dataset%data_size, status)
+        if (version == 3 .and. layout_class == H5_LAYOUT_CHUNKED) then
+            call this%reader%read_i8(rank_byte, status)
+            call read_unsigned(this%reader, this%offset_size, ignored, status)
+            if (.not. status%ok()) return
+            rank = byte_value(rank_byte)
+            do i = 1, rank
+                call this%reader%read_le_i32(mask, status)
+                if (.not. status%ok()) return
+            end do
+            call parse_v1_chunk_btree(this, ignored, rank, dataset, status)
+            return
+        end if
+        if ((version /= 4 .and. version /= 5) .or. &
+            layout_class /= H5_LAYOUT_CHUNKED) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 storage layout is not supported")
+            return
+        end if
+        call this%reader%read_i8(flags_byte, status)
+        call this%reader%read_i8(rank_byte, status)
+        call this%reader%read_i8(width_byte, status)
+        if (.not. status%ok()) return
+        rank = byte_value(rank_byte)
+        width = byte_value(width_byte)
+        do i = 1, rank
+            call read_unsigned(this%reader, width, ignored, status)
+            if (.not. status%ok()) return
+        end do
+        call this%reader%read_i8(index_byte, status)
+        if (.not. status%ok()) return
+        if (byte_value(index_byte) /= 1) then
+            call status%set(FORTIO_ENOTSUP, &
+                "only single-chunk HDF5 filtered datasets are supported")
+            return
+        end if
+        if (.not. btest(byte_value(flags_byte), 1)) then
+            call status%set(FORTIO_EFORMAT, "single HDF5 chunk lacks filtered size")
+            return
+        end if
+        call read_unsigned(this%reader, this%length_size, dataset%data_size, status)
+        call this%reader%read_le_i32(mask, status)
+        call read_unsigned(this%reader, this%offset_size, dataset%data_address, status)
+        dataset%filter_mask = mask
     end subroutine parse_layout_message
+
+    subroutine parse_v1_chunk_btree(this, address, rank, dataset, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: address
+        integer, intent(in) :: rank
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), node_type, level
+        integer(int16) :: entries_i16
+        integer(int32) :: chunk_size_i32, filter_mask_i32
+        integer(int64) :: ignored
+        integer :: i, entries
+
+        call this%reader%seek(this%base_address + address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(node_type, status)
+        call this%reader%read_i8(level, status)
+        call this%reader%read_le_i16(entries_i16, status)
+        if (.not. status%ok()) return
+        entries = int(entries_i16)
+        if (any(signature /= [int(iachar("T"), int8), int(iachar("R"), int8), &
+            int(iachar("E"), int8), int(iachar("E"), int8)]) .or. &
+            byte_value(node_type) /= 1 .or. byte_value(level) /= 0 .or. &
+            entries /= 1) then
+            call status%set(FORTIO_ENOTSUP, &
+                "only one leaf chunk in a version-1 HDF5 chunk index is supported")
+            return
+        end if
+        call skip_bytes(this%reader, 2_int64*this%offset_size)
+        call this%reader%read_le_i32(chunk_size_i32, status)
+        call this%reader%read_le_i32(filter_mask_i32, status)
+        do i = 1, rank
+            call this%reader%read_le_i64(ignored, status)
+        end do
+        call read_unsigned(this%reader, this%offset_size, dataset%data_address, status)
+        if (.not. status%ok()) return
+        dataset%data_size = int(chunk_size_i32, int64)
+        dataset%filter_mask = filter_mask_i32
+    end subroutine parse_v1_chunk_btree
+
+    subroutine parse_filter_message(this, dataset, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: version_byte, count_byte
+        integer(int16) :: filter_id_i16, name_length_i16, flags_i16, values_i16
+        integer(int32) :: value
+        integer :: count, filter_id, i, j, name_length, value_count, version
+
+        call this%reader%read_i8(version_byte, status)
+        call this%reader%read_i8(count_byte, status)
+        if (.not. status%ok()) return
+        version = byte_value(version_byte)
+        count = byte_value(count_byte)
+        if (version == 1) call skip_bytes(this%reader, 6_int64)
+        do i = 0, count - 1
+            call this%reader%read_le_i16(filter_id_i16, status)
+            if (.not. status%ok()) return
+            filter_id = int(filter_id_i16)
+            name_length = 0
+            if (version == 1 .or. filter_id >= 256) then
+                call this%reader%read_le_i16(name_length_i16, status)
+                name_length = int(name_length_i16)
+            end if
+            call this%reader%read_le_i16(flags_i16, status)
+            call this%reader%read_le_i16(values_i16, status)
+            if (.not. status%ok()) return
+            value_count = int(values_i16)
+            if (name_length > 0) call skip_bytes(this%reader, int(name_length, int64))
+            do j = 1, value_count
+                call this%reader%read_le_i32(value, status)
+                if (.not. status%ok()) return
+            end do
+            if (version == 1 .and. mod(value_count, 2) == 1) &
+                call skip_bytes(this%reader, 4_int64)
+            if (filter_id == 2) dataset%shuffle_index = i
+            if (filter_id == 1) dataset%deflate_index = i
+        end do
+    end subroutine parse_filter_message
 
     subroutine parse_attribute_message(this, dataset, status)
         class(hdf5_file_t), intent(inout) :: this

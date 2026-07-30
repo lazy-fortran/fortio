@@ -1,10 +1,12 @@
 program test_hdf5_tools_read
     use, intrinsic :: iso_fortran_env, only: real64
-    use hdf5_tools, only: HID_T, h5_init, h5_deinit, h5_open, h5_close, h5_get, &
-                          h5_get_bounds, h5_exists, h5_obj_exists
+    use hdf5_tools, only: HID_T, HSIZE_T, SIZE_T, h5_init, h5_deinit, h5_open, &
+        h5_close, h5_get, h5_get_bounds, h5_exists, h5_obj_exists
     implicit none
 
     integer(HID_T) :: file_id
+    integer(HSIZE_T) :: dimensions(2)
+    integer(SIZE_T) :: element_count
     character(len=1024) :: fixture, generator, command
     character(len=32) :: label
     integer :: scalar, continued_value, command_status, lb1, lb2, ub1, ub2
@@ -28,6 +30,8 @@ program test_hdf5_tools_read
     call h5_get(file_id, "grid/Nt", scalar)
     call h5_get(file_id, "grid/x_values", x)
     call h5_get(file_id, "grid/matrix", matrix)
+    dimensions = shape(matrix, kind=HSIZE_T)
+    element_count = int(product(dimensions), SIZE_T)
     call h5_get(file_id, "grid/label", label)
     call h5_get(file_id, "integer_ranks/int_matrix", int_matrix)
     call h5_get(file_id, "integer_ranks/int_cube", int_cube)
@@ -61,22 +65,23 @@ program test_hdf5_tools_read
         error stop "hdf5_tools vector differs from oracle"
     if (any(abs(matrix - reshape([1, 2, 3, 4, 5, 6], [3, 2])) > 1.0e-12_real64)) &
         error stop "hdf5_tools matrix differs from oracle"
+    if (element_count /= 6_SIZE_T) error stop "HDF5 size kinds differ from oracle"
     if (trim(label) /= "stellarator") error stop "hdf5_tools string differs from oracle"
     if (any(int_matrix /= reshape([(scalar, scalar=1, 6)], shape(int_matrix)))) &
         error stop "hdf5_tools integer matrix differs from oracle"
     if (any(int_cube /= reshape([(scalar, scalar=1, 12)], shape(int_cube)))) &
         error stop "hdf5_tools integer cube differs from oracle"
     if (any(abs(rank4 - reshape([(real(scalar, real64), scalar=1, 12)], &
-                                shape(rank4))) > 1.0e-12_real64)) &
+        shape(rank4))) > 1.0e-12_real64)) &
         error stop "hdf5_tools rank-4 real differs from oracle"
     if (any(abs(real_cube - reshape([(real(scalar, real64), scalar=1, 12)], &
-                                    shape(real_cube))) > 1.0e-12_real64)) &
+        shape(real_cube))) > 1.0e-12_real64)) &
         error stop "hdf5_tools rank-3 real differs from oracle"
     if (any(abs(rank5 - reshape([(real(scalar, real64), scalar=1, 8)], &
-                                shape(rank5))) > 1.0e-12_real64)) &
+        shape(rank5))) > 1.0e-12_real64)) &
         error stop "hdf5_tools rank-5 real differs from oracle"
     if (any(abs(complex_vector - [cmplx(1.0, 4.0, real64), &
-                                  cmplx(-2.0, 5.25, real64), &
-                                  cmplx(3.5, -6.0, real64)]) > 1.0e-12_real64)) &
+        cmplx(-2.0, 5.25, real64), &
+        cmplx(3.5, -6.0, real64)]) > 1.0e-12_real64)) &
         error stop "hdf5_tools complex vector differs from h5py oracle"
 end program test_hdf5_tools_read

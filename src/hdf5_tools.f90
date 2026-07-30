@@ -1,5 +1,5 @@
 module hdf5_tools
-    use, intrinsic :: iso_c_binding, only: c_int, c_null_char
+    use, intrinsic :: iso_c_binding, only: c_int, c_null_char, c_size_t
     use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
     use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
@@ -10,6 +10,8 @@ module hdf5_tools
     private
 
     integer, parameter, public :: HID_T = int64
+    integer, parameter, public :: HSIZE_T = c_size_t
+    integer, parameter, public :: SIZE_T = c_size_t
     integer, parameter, public :: dcp = real64
     integer(HID_T), parameter, public :: H5T_NATIVE_INTEGER = 1_HID_T
     integer(HID_T), parameter, public :: H5T_NATIVE_DOUBLE = 2_HID_T
