@@ -141,7 +141,11 @@ contains
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_dataset_t) :: dataset
 
-        call find_dataset(this, path, dataset, status)
+        if (len_trim(path) == 0 .or. trim(path) == "/") then
+            call parse_dataset_header(this, this%root_address, dataset, status)
+        else
+            call find_dataset(this, path, dataset, status)
+        end if
         if (.not. status%ok()) return
         if (allocated(dataset%attributes)) then
             attributes = dataset%attributes

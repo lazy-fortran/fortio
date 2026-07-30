@@ -6,8 +6,12 @@ variables:
     int count ;
     int indices(mode) ;
     double radius(radius) ;
+        radius:units = "m" ;
     double radius_values(radius) ;
     double coefficients(mode, radius) ;
+
+// global attributes:
+        :zeta_convention = "cyl" ;
 data:
     count = 3 ;
     indices = 4, 9 ;
