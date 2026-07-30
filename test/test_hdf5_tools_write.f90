@@ -9,7 +9,7 @@ program test_hdf5_tools_write
     implicit none
 
     integer(HID_T) :: file_id, group_id, copy_id, integer_stream_id, real_stream_id
-    integer(HID_T) :: real_matrix_id
+    integer(HID_T) :: real_matrix_id, leading_matrix_id
     integer :: scalar, exit_status, unit
     integer :: matrix(2, 3)
     integer, allocatable :: absent(:)
@@ -18,7 +18,7 @@ program test_hdf5_tools_write
     integer :: integer_stream(3)
     integer(int64) :: long_values(2)
     real(real64) :: real_stream(3)
-    real(real64) :: real_matrix(2, 3)
+    real(real64) :: real_matrix(2, 3), leading_matrix(2, 3)
     character(len=512) :: command, dump_path, line, path
     character(len=32) :: label
     logical :: found_group, found_matrix, found_matrix_shape, found_cube
@@ -66,6 +66,11 @@ program test_hdf5_tools_write
     call h5_append_double_1(real_matrix_id, [1.0_real64, 2.0_real64], 1)
     call h5_append_double_1(real_matrix_id, [3.0_real64, 4.0_real64], 2)
     call h5_append_double_1(real_matrix_id, [5.0_real64, 6.0_real64], 3)
+    call h5_define_unlimited_matrix(file_id, "leading_matrix", H5T_NATIVE_DOUBLE, &
+        [-1, 3], leading_matrix_id)
+    call h5_append_double_1(leading_matrix_id, [1.0_real64, 2.0_real64], 1)
+    call h5_append_double_1(leading_matrix_id, [3.0_real64, 4.0_real64], 2)
+    call h5_append_double_1(leading_matrix_id, [5.0_real64, 6.0_real64], 3)
     call h5_create_parent_groups(file_id, "prepared/nested/")
     call h5_add(file_id, "prepared/nested/value", 9)
     call h5_add(file_id, "absent", absent, default=7)
@@ -90,6 +95,7 @@ program test_hdf5_tools_write
     call h5_get(file_id, "integer_stream", integer_stream)
     call h5_get(file_id, "real_stream", real_stream)
     call h5_get(file_id, "real_matrix", real_matrix)
+    call h5_get(file_id, "leading_matrix", leading_matrix)
     call h5_get(file_id, "long_values", long_values)
     if (any(long_values /= [2_int64**40, -(2_int64**40)])) &
         error stop "64-bit integer round trip differs"
@@ -99,6 +105,8 @@ program test_hdf5_tools_write
     if (any(abs(real_matrix - reshape([1.0_real64, 2.0_real64, 3.0_real64, &
         4.0_real64, 5.0_real64, 6.0_real64], [2, 3])) > 1.0e-12_real64)) &
         error stop "real matrix append differs"
+    if (any(leading_matrix /= reshape([1, 2, 3, 4, 5, 6], [2, 3]))) &
+        error stop "leading unlimited matrix append differs"
     if (h5_exists(file_id, "deleted")) error stop "deleted dataset still exists"
     call h5_get(file_id, "absent", scalar)
     if (scalar /= 7) error stop "hdf5_tools unallocated default differs"
