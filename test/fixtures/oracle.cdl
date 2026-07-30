@@ -5,6 +5,7 @@ dimensions:
 variables:
     int scalar ;
     double x_values(x) ;
+        x_values:units = "m" ;
     double matrix(y, x) ;
 data:
     scalar = 42 ;

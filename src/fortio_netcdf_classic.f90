@@ -31,6 +31,7 @@ module fortio_netcdf_classic
         integer(int64) :: begin_offset = 0_int64
         integer(int64) :: element_count = 0_int64
         logical :: record_variable = .false.
+        integer :: attribute_count = 0
     end type classic_variable_t
 
     type, public :: classic_file_t
@@ -45,6 +46,7 @@ module fortio_netcdf_classic
         procedure :: open => classic_open
         procedure :: close => classic_close
         procedure :: variable_id => classic_variable_id
+        procedure :: dimension_id => classic_dimension_id
         procedure :: variable_shape => classic_variable_shape
         procedure :: read_i32_scalar => classic_read_i32_scalar
         procedure :: read_i32_1 => classic_read_i32_1
@@ -128,6 +130,20 @@ contains
             end if
         end do
     end function classic_variable_id
+
+    integer function classic_dimension_id(this, name)
+        class(classic_file_t), intent(in) :: this
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        classic_dimension_id = 0
+        do i = 1, size(this%dimensions)
+            if (this%dimensions(i)%name == trim(name)) then
+                classic_dimension_id = i
+                return
+            end if
+        end do
+    end function classic_dimension_id
 
     function classic_variable_shape(this, variable_id) result(shape)
         class(classic_file_t), intent(in) :: this
@@ -380,7 +396,7 @@ contains
                 if (.not. status%ok()) return
                 this%variables(i)%dimension_ids(j) = id
             end do
-            call skip_attributes(this%reader, status)
+            call skip_attributes(this%reader, status, this%variables(i)%attribute_count)
             if (.not. status%ok()) return
             call this%reader%read_be_i32(type_code, status)
             if (.not. status%ok()) return
@@ -420,9 +436,10 @@ contains
         end do
     end subroutine finalize_variable_layout
 
-    subroutine skip_attributes(reader, status)
+    subroutine skip_attributes(reader, status, attribute_count)
         type(byte_reader_t), intent(inout) :: reader
         type(fortio_status_t), intent(inout) :: status
+        integer, intent(out), optional :: attribute_count
         integer(int32) :: tag, count, type_code, element_count
         integer(int64) :: bytes
         integer :: i
@@ -432,6 +449,7 @@ contains
         if (.not. status%ok()) return
         call reader%read_be_i32(count, status)
         if (.not. status%ok()) return
+        if (present(attribute_count)) attribute_count = count
         if (tag == 0 .and. count == 0) return
         if (tag /= NC_ATTRIBUTE .or. count < 0) then
             call status%set(FORTIO_EFORMAT, "invalid NetCDF attribute list")

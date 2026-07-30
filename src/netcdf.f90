@@ -11,6 +11,7 @@ module netcdf
     integer, parameter, public :: NF90_NOERR = FORTIO_SUCCESS
     integer, parameter, public :: NF90_EBADID = FORTIO_ESTATE
     integer, parameter, public :: NF90_ENOTVAR = FORTIO_ENOTFOUND
+    integer, parameter, public :: NF90_EBADDIM = FORTIO_ENOTFOUND
     integer, parameter, public :: NF90_ENOTSUPPORT = FORTIO_ENOTSUP
     integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
     integer, parameter, public :: NF90_NOWRITE = 0
@@ -19,6 +20,9 @@ module netcdf
     integer, parameter, public :: NF90_NOCLOBBER = 4
     integer, parameter, public :: NF90_NETCDF4 = 4096
     integer, parameter, public :: NF90_UNLIMITED = 0
+    integer, parameter, public :: NF90_GLOBAL = -1
+    integer, parameter, public :: NF90_MAX_NAME = 256
+    integer, parameter, public :: NF90_MAX_VAR_DIMS = 1024
     integer, parameter, public :: NF90_BYTE = NC_BYTE
     integer, parameter, public :: NF90_CHAR = NC_CHAR
     integer, parameter, public :: NF90_SHORT = NC_SHORT
@@ -49,6 +53,7 @@ module netcdf
 
     public :: nf90_open, nf90_create, nf90_close, nf90_def_dim, nf90_def_var
     public :: nf90_enddef, nf90_inq_varid, nf90_get_var, nf90_put_var, nf90_strerror
+    public :: nf90_inq_dimid, nf90_inquire_dimension, nf90_inquire_variable
 
 contains
 
@@ -201,6 +206,81 @@ contains
             code = NF90_NOERR
         end if
     end function nf90_inq_varid
+
+    integer function nf90_inq_dimid(ncid, name, dimid) result(code)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: dimid
+
+        if (.not. valid_reader(ncid)) then
+            code = NF90_EBADID
+            dimid = -1
+            return
+        end if
+        dimid = files(ncid)%dimension_id(name)
+        if (dimid == 0) then
+            code = NF90_EBADDIM
+            dimid = -1
+        else
+            code = NF90_NOERR
+        end if
+    end function nf90_inq_dimid
+
+    integer function nf90_inquire_dimension(ncid, dimid, name, len) result(code)
+        integer, intent(in) :: ncid, dimid
+        character(len=*), intent(out), optional :: name
+        integer, intent(out), optional :: len
+
+        if (.not. valid_reader(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        if (dimid < 1 .or. dimid > size(files(ncid)%dimensions)) then
+            code = NF90_EBADDIM
+            return
+        end if
+        if (present(name)) name = files(ncid)%dimensions(dimid)%name
+        if (present(len)) then
+            if (files(ncid)%dimensions(dimid)%unlimited) then
+                len = int(files(ncid)%record_count)
+            else
+                len = int(files(ncid)%dimensions(dimid)%length)
+            end if
+        end if
+        code = NF90_NOERR
+    end function nf90_inquire_dimension
+
+    integer function nf90_inquire_variable(ncid, varid, name, xtype, ndims, dimids, &
+                                           natts) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(out), optional :: name
+        integer, intent(out), optional :: xtype, ndims, dimids(:), natts
+        integer :: rank, i
+
+        if (.not. valid_reader(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        if (varid < 1 .or. varid > size(files(ncid)%variables)) then
+            code = NF90_ENOTVAR
+            return
+        end if
+        rank = size(files(ncid)%variables(varid)%dimension_ids)
+        if (present(name)) name = files(ncid)%variables(varid)%name
+        if (present(xtype)) xtype = files(ncid)%variables(varid)%type_code
+        if (present(ndims)) ndims = rank
+        if (present(natts)) natts = files(ncid)%variables(varid)%attribute_count
+        if (present(dimids)) then
+            if (size(dimids) < rank) then
+                code = NF90_EINVAL
+                return
+            end if
+            do i = 1, rank
+                dimids(i) = files(ncid)%variables(varid)%dimension_ids(rank - i + 1) + 1
+            end do
+        end if
+        code = NF90_NOERR
+    end function nf90_inquire_variable
 
     integer function get_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
@@ -438,6 +518,13 @@ contains
         valid_writer = valid_id(ncid)
         if (valid_writer) valid_writer = writing(ncid)
     end function valid_writer
+
+    logical function valid_reader(ncid)
+        integer, intent(in) :: ncid
+
+        valid_reader = valid_id(ncid)
+        if (valid_reader) valid_reader = .not. writing(ncid)
+    end function valid_reader
 
     logical function prepare_get(ncid, varid, status)
         integer, intent(in) :: ncid, varid
