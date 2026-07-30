@@ -12,7 +12,7 @@ program test_hdf5_write_oracle
     real(real64), allocatable :: vector(:), matrix(:, :)
     real(real64) :: matrix_input(3, 2)
     integer :: command_status, unit, io_status
-    logical :: found_scalar, found_vector, found_matrix
+    logical :: found_scalar, found_vector, found_matrix, found_grid, found_deep
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/fortio-written.h5"
@@ -27,27 +27,39 @@ program test_hdf5_write_oracle
     if (.not. status%ok()) error stop status%message
     call writer%add_r64_2("matrix", matrix_input, status)
     if (.not. status%ok()) error stop status%message
+    call writer%define_group("/metadata", status)
+    if (.not. status%ok()) error stop status%message
+    call writer%add_i32_scalar("/grid/Nt", 32_int32, status)
+    if (.not. status%ok()) error stop status%message
+    call writer%add_r64_scalar("/grid/deep/value", 9.5_real64, status)
+    if (.not. status%ok()) error stop status%message
     call writer%close(status)
     if (.not. status%ok()) error stop status%message
 
-    command = "h5dump -d scalar -d vector -d matrix "//trim(path)//" > "//trim(dump_path)
+    command = "h5dump "//trim(path)//" > "//trim(dump_path)
     call execute_command_line(trim(command), exitstat=command_status)
     if (command_status /= 0) error stop "system HDF5 rejected fortio output"
     open(newunit=unit, file=trim(dump_path), status="old", action="read")
     found_scalar = .false.
     found_vector = .false.
     found_matrix = .false.
+    found_grid = .false.
+    found_deep = .false.
     do
         read(unit, '(A)', iostat=io_status) line
         if (io_status /= 0) exit
         if (index(line, "(0): 42") > 0) found_scalar = .true.
         if (index(line, "1.25, -2.5, 4.75") > 0) found_vector = .true.
         if (index(line, "(0,0): 1, 2, 3") > 0) found_matrix = .true.
+        if (index(line, 'GROUP "grid"') > 0) found_grid = .true.
+        if (index(line, 'GROUP "deep"') > 0) found_deep = .true.
     end do
     close(unit)
     if (.not. found_scalar) error stop "h5dump scalar differs"
     if (.not. found_vector) error stop "h5dump vector differs"
     if (.not. found_matrix) error stop "h5dump matrix differs"
+    if (.not. found_grid) error stop "h5dump nested group missing"
+    if (.not. found_deep) error stop "h5dump deep group missing"
 
     call reader%open(trim(path), status)
     if (.not. status%ok()) error stop status%message
@@ -61,5 +73,7 @@ program test_hdf5_write_oracle
     if (.not. status%ok()) error stop status%message
     if (any(abs(matrix - matrix_input) > 1.0e-12_real64)) &
         error stop "fortio matrix round trip failed"
+    call reader%read("/grid/Nt", scalar, status)
+    if (.not. status%ok() .or. scalar /= 32) error stop "nested scalar round trip failed"
     call reader%close(status)
 end program test_hdf5_write_oracle
