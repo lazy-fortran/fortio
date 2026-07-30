@@ -38,6 +38,9 @@ module fortio_bytes
         procedure :: write_be_i64 => writer_write_be_i64
         procedure :: write_be_r32 => writer_write_be_r32
         procedure :: write_be_r64 => writer_write_be_r64
+        procedure :: write_le_i32 => writer_write_le_i32
+        procedure :: write_le_i64 => writer_write_le_i64
+        procedure :: write_le_r64 => writer_write_le_r64
         procedure :: write_bytes => writer_write_bytes
     end type byte_writer_t
 
@@ -160,6 +163,40 @@ contains
 
         call this%write_be_i64(transfer(value, 0_int64), status)
     end subroutine writer_write_be_r64
+
+    subroutine writer_write_le_i32(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int32), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(4)
+        integer :: i
+
+        do i = 1, 4
+            bytes(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int32)), int8)
+        end do
+        call this%write_bytes(bytes, status)
+    end subroutine writer_write_le_i32
+
+    subroutine writer_write_le_i64(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        integer(int64), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: bytes(8)
+        integer :: i
+
+        do i = 1, 8
+            bytes(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int64)), int8)
+        end do
+        call this%write_bytes(bytes, status)
+    end subroutine writer_write_le_i64
+
+    subroutine writer_write_le_r64(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real64), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%write_le_i64(transfer(value, 0_int64), status)
+    end subroutine writer_write_le_r64
 
     subroutine reader_open(this, path, status)
         class(byte_reader_t), intent(inout) :: this

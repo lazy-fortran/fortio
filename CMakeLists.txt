@@ -11,6 +11,7 @@ add_library(fortio
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
     src/fortio_hdf5_reader.f90
+    src/fortio_hdf5_writer.f90
     src/fortio.f90
     src/hdf5_tools.f90
     src/netcdf.f90
@@ -84,6 +85,11 @@ if(BUILD_TESTING)
     add_test(NAME hdf5_tools_read COMMAND test_hdf5_tools_read
         "${CMAKE_CURRENT_BINARY_DIR}/hdf5-tools-oracle.h5"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py")
+
+    add_executable(test_hdf5_write_oracle test/test_hdf5_write_oracle.f90)
+    target_link_libraries(test_hdf5_write_oracle PRIVATE fortio)
+    add_test(NAME hdf5_write_oracle COMMAND test_hdf5_write_oracle
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-written.h5")
 endif()
 
 install(TARGETS fortio EXPORT fortio-targets
