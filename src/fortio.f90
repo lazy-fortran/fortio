@@ -33,6 +33,7 @@ module fortio
     public :: fortio_status_t
     public :: FORTIO_SUCCESS, FORTIO_EIO, FORTIO_EFORMAT, FORTIO_ENOTFOUND
     public :: FORTIO_ETYPE, FORTIO_ESHAPE, FORTIO_ENOTSUP, FORTIO_ESTATE
+    public :: FORTIO_EEXIST
 
 contains
 
