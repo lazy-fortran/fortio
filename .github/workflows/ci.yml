@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install compiler and independent NetCDF oracle
-        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin
+      - name: Install compiler and independent format oracles
+        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py
       - uses: fortran-lang/setup-fpm@v7
       - name: Build
         run: fpm build
@@ -24,8 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install compiler and independent NetCDF oracle
-        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin
+      - name: Install compiler and independent format oracles
+        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py
       - name: Configure
         run: cmake -S . -B build -DBUILD_TESTING=ON
       - name: Build
