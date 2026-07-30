@@ -6,6 +6,7 @@ include(CMakePackageConfigHelpers)
 
 add_library(fortio
     src/fortio_status.f90
+    src/fortio_checksum.f90
     src/fortio_bytes.f90
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
