@@ -1,14 +1,14 @@
 program test_hdf5_tools_read
     use, intrinsic :: iso_fortran_env, only: real64
     use hdf5_tools, only: HID_T, HSIZE_T, SIZE_T, h5_init, h5_deinit, h5_open, &
-        h5_close, h5_get, h5_get_bounds, h5_exists, h5_obj_exists
+        h5_open_rw, h5_close, h5_get, h5_add, h5_get_bounds, h5_exists, h5_obj_exists
     use h5lt, only: h5ltget_dataset_info_f
     implicit none
 
     integer(HID_T) :: file_id
     integer(HSIZE_T) :: dimensions(2)
     integer(SIZE_T) :: element_count
-    character(len=1024) :: fixture, generator, command
+    character(len=1024) :: fixture, generator, verifier, command
     character(len=32) :: label
     integer :: scalar, continued_value, command_status, hdferr, lb1, lb2, &
         type_class, ub1, ub2
@@ -61,7 +61,20 @@ program test_hdf5_tools_read
     call h5_obj_exists(file_id, "dense/value_63", object_exists)
     if (.not. object_exists) error stop "h5_obj_exists missed dense dataset"
     call h5_close(file_id)
+
+    call h5_open_rw(trim(fixture), file_id)
+    call h5_get(file_id, "grid/Nt", scalar)
+    if (scalar /= 42) error stop "read/write handle differs from h5py oracle"
+    call h5_add(file_id, "rw_added", 73)
+    call h5_close(file_id)
     call h5_deinit()
+
+    call get_command_argument(3, verifier)
+    if (len_trim(verifier) == 0) &
+        verifier = "test/fixtures/verify_hdf5_open_rw.py"
+    command = "python3 "//trim(verifier)//" "//trim(fixture)
+    call execute_command_line(trim(command), exitstat=command_status)
+    if (command_status /= 0) error stop "HDF5 read/write oracle verification failed"
 
     if (scalar /= 42) error stop "hdf5_tools integer scalar differs from oracle"
     if (any(abs(x - [1.25_real64, -2.5_real64, 4.75_real64]) > 1.0e-6_real64)) &
