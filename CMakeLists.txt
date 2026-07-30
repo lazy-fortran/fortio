@@ -5,6 +5,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(ZLIB REQUIRED)
 option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OFF)
+option(FORTIO_BUILD_TESTING "Build fortio tests" ${PROJECT_IS_TOP_LEVEL})
 option(FORTIO_INSTALL "Install fortio targets and package files" ${PROJECT_IS_TOP_LEVEL})
 
 add_library(fortio
@@ -92,7 +93,7 @@ if(FORTIO_BUILD_BENCHMARKS)
 endif()
 
 include(CTest)
-if(BUILD_TESTING)
+if(FORTIO_BUILD_TESTING)
     find_package(OpenMP REQUIRED COMPONENTS Fortran)
     add_executable(test_checksum test/test_checksum.f90)
     target_link_libraries(test_checksum PRIVATE fortio)
