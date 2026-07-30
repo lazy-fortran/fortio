@@ -3,7 +3,7 @@ module fortio_netcdf_writer
     use fortio_bytes, only: byte_writer_t
     use fortio_netcdf_classic, only: NC_CHAR, NC_INT, NC_DOUBLE
     use fortio_status, only: fortio_status_t, FORTIO_ESTATE, FORTIO_ETYPE, &
-                            FORTIO_ESHAPE, FORTIO_ENOTFOUND
+        FORTIO_ESHAPE, FORTIO_ENOTFOUND
     implicit none
     private
 
@@ -108,7 +108,7 @@ contains
     end subroutine classic_writer_define_dimension
 
     subroutine classic_writer_define_variable(this, name, type_code, dimension_ids, &
-                                               id, status)
+            id, status)
         class(classic_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: name
         integer, intent(in) :: type_code
@@ -462,8 +462,8 @@ contains
             header_size = header_size + 8
             do i = 1, size(this%variables)
                 header_size = header_size + name_size(this%variables(i)%name) + 4 + &
-                              4*size(this%variables(i)%dimension_ids) + &
-                              attributes_size(this%variables(i)%attributes) + 4 + 4 + 4
+                    4*size(this%variables(i)%dimension_ids) + &
+                    attributes_size(this%variables(i)%attributes) + 4 + 4 + 4
             end do
         end if
     end function header_size
@@ -476,7 +476,7 @@ contains
         integer :: i, j
 
         magic = [int(iachar("C"), int8), int(iachar("D"), int8), &
-                 int(iachar("F"), int8), 1_int8]
+            int(iachar("F"), int8), 1_int8]
         call writer%write_bytes(magic, status)
         if (.not. status%ok()) return
         call writer%write_be_i32(0_int32, status)
@@ -635,12 +635,7 @@ contains
         type(byte_writer_t), intent(inout) :: writer
         real(real64), intent(in) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: i
-
-        do i = 1, size(values)
-            call writer%write_be_r64(values(i), status)
-            if (.not. status%ok()) return
-        end do
+        call writer%write_be_r64_array(values, status)
     end subroutine write_r64_values
 
     subroutine write_padding(writer, count, status)

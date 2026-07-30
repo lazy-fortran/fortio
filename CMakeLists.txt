@@ -3,6 +3,7 @@ project(fortio VERSION 0.1.0 LANGUAGES Fortran)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF" OFF)
 
 add_library(fortio
     src/fortio_status.f90
@@ -29,6 +30,24 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     # fortio uses standard allocatable assignment internally. Some consumers,
     # including libneo, disable that language behavior project-wide.
     target_compile_options(fortio PRIVATE -frealloc-lhs)
+endif()
+
+if(FORTIO_BUILD_BENCHMARKS)
+    find_program(NF_CONFIG nf-config REQUIRED)
+    execute_process(COMMAND "${NF_CONFIG}" --includedir
+        OUTPUT_VARIABLE NETCDFF_INCLUDE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND "${NF_CONFIG}" --flibs
+        OUTPUT_VARIABLE NETCDFF_LINK_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    separate_arguments(NETCDFF_LINK_FLAGS NATIVE_COMMAND "${NETCDFF_LINK_FLAGS}")
+
+    add_executable(benchmark_fortio_netcdf benchmark/netcdf_roundtrip.f90)
+    target_link_libraries(benchmark_fortio_netcdf PRIVATE fortio)
+
+    add_executable(benchmark_native_netcdf benchmark/netcdf_roundtrip.f90)
+    target_include_directories(benchmark_native_netcdf PRIVATE "${NETCDFF_INCLUDE_DIR}")
+    target_link_libraries(benchmark_native_netcdf PRIVATE ${NETCDFF_LINK_FLAGS})
 endif()
 
 include(CTest)

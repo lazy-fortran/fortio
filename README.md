@@ -49,3 +49,20 @@ FetchContent_Declare(fortio
 FetchContent_MakeAvailable(fortio)
 target_link_libraries(my_program PRIVATE fortio::fortio)
 ```
+
+## Performance comparison
+
+The optional benchmark builds the same dense NetCDF round-trip source once
+against fortio and once against the system NetCDF Fortran library. The system
+library is a benchmark dependency only.
+
+```sh
+cmake -S . -B build-benchmark \
+  -DCMAKE_BUILD_TYPE=Release -DFORTIO_BUILD_BENCHMARKS=ON
+cmake --build build-benchmark -j
+python benchmark/compare.py \
+  build-benchmark/benchmark_fortio_netcdf \
+  build-benchmark/benchmark_native_netcdf --enforce
+```
+
+The comparison uses medians and verifies identical result checksums.
