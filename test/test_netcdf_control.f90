@@ -2,7 +2,7 @@ program test_netcdf_control
     use netcdf
     implicit none
 
-    integer :: ncid, dimid, group_id, status, varid
+    integer :: ncid, dimid, group_id, status, varid, later_varid
 
     status = nf90_create("control.nc", NF90_CLOBBER, ncid)
     if (status /= NF90_NOERR) error stop "create failed"
@@ -34,6 +34,14 @@ program test_netcdf_control
     if (status /= NF90_NOERR) error stop "second create failed"
     status = nf90_def_var(ncid, "second_write", NF90_INT, varid=varid)
     if (status /= NF90_NOERR) error stop "second definition failed"
+    status = nf90_put_var(ncid, varid, 7)
+    if (status /= NF90_NOERR) error stop "write in NetCDF-4 define mode failed"
+    status = nf90_put_att(ncid, varid, "units", "count")
+    if (status /= NF90_NOERR) error stop "attribute after define-mode write failed"
+    status = nf90_def_var(ncid, "later_write", NF90_INT, varid=later_varid)
+    if (status /= NF90_NOERR) error stop "definition after define-mode write failed"
+    status = nf90_put_var(ncid, later_varid, 9)
+    if (status /= NF90_NOERR) error stop "later define-mode write failed"
     status = nf90_close(ncid)
     if (status /= NF90_NOERR) error stop "second close failed"
 end program test_netcdf_control

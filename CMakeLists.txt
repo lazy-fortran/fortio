@@ -76,7 +76,7 @@ if(BUILD_TESTING)
     add_test(NAME netcdf_control_oracle COMMAND ncdump -v after_redef control.nc)
     set_tests_properties(netcdf_control_oracle PROPERTIES DEPENDS netcdf_control)
     add_test(NAME netcdf_control_reuse_oracle
-        COMMAND ncdump -h control-second.nc)
+        COMMAND ncdump -v second_write,later_write control-second.nc)
     set_tests_properties(netcdf_control_reuse_oracle PROPERTIES DEPENDS netcdf_control)
 
     add_executable(test_classic_write_oracle test/test_classic_write_oracle.f90)
