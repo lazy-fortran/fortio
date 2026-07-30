@@ -13,6 +13,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_MSG_CONTINUATION = 16
     integer, parameter :: H5_TYPE_INTEGER = 0
     integer, parameter :: H5_TYPE_FLOAT = 1
+    integer, parameter :: H5_TYPE_STRING = 3
     integer, parameter :: H5_LAYOUT_CONTIGUOUS = 1
 
     type :: hdf5_link_t
@@ -52,6 +53,7 @@ module fortio_hdf5_reader
         procedure :: read_r64_2 => hdf5_read_r64_2
         procedure :: read_r64_3 => hdf5_read_r64_3
         procedure :: read_i32_attribute => hdf5_read_i32_attribute
+        procedure :: read_text_scalar => hdf5_read_text_scalar
     end type hdf5_file_t
 
 contains
@@ -174,6 +176,34 @@ contains
             end if
         end do
     end subroutine hdf5_read_i32_attribute
+
+    subroutine hdf5_read_text_scalar(this, path, value, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable, intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer(int8) :: byte
+        integer :: i
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (dataset%type_class /= H5_TYPE_STRING) then
+            call status%set(FORTIO_ETYPE, "dataset is not a fixed-width string")
+            return
+        end if
+        if (size(dataset%dimensions) /= 0) then
+            call status%set(FORTIO_ESHAPE, "string dataset is not scalar")
+            return
+        end if
+        allocate(character(len=dataset%element_size) :: value)
+        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        do i = 1, len(value)
+            call this%reader%read_i8(byte, status)
+            if (.not. status%ok()) return
+            value(i:i) = achar(byte_value(byte))
+        end do
+    end subroutine hdf5_read_text_scalar
 
     subroutine hdf5_read_r64_scalar(this, path, value, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -570,7 +600,8 @@ contains
         dataset%element_size = size_value
         dataset%little_endian = .not. btest(byte_value(class_bits(1)), 0)
         if (dataset%type_class /= H5_TYPE_INTEGER .and. &
-            dataset%type_class /= H5_TYPE_FLOAT) then
+            dataset%type_class /= H5_TYPE_FLOAT .and. &
+            dataset%type_class /= H5_TYPE_STRING) then
             call status%set(FORTIO_ENOTSUP, "HDF5 datatype class is not supported")
         end if
     end subroutine parse_datatype_message

@@ -26,6 +26,7 @@ module fortio
         procedure :: read_r64_2 => file_read_r64_2
         procedure :: read_r64_3 => file_read_r64_3
         procedure :: read_i32_attribute => file_read_i32_attribute
+        procedure :: read_text_scalar => file_read_text_scalar
         generic :: read => read_i32_scalar, read_i32_1, read_r64_scalar, read_r64_1, &
                            read_r64_2, read_r64_3
         final :: file_finalize
@@ -184,6 +185,19 @@ contains
         end if
         call this%hdf5%read_i32_attribute(path, name, values, found, status)
     end subroutine file_read_i32_attribute
+
+    subroutine file_read_text_scalar(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable, intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "strings are only supported for HDF5 here")
+            return
+        end if
+        call this%hdf5%read_text_scalar(path, value, status)
+    end subroutine file_read_text_scalar
 
     pure logical function is_hdf5_signature(bytes)
         integer(int8), intent(in) :: bytes(8)

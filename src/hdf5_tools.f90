@@ -22,6 +22,7 @@ module hdf5_tools
         module procedure h5_get_double_0
         module procedure h5_get_double_1
         module procedure h5_get_double_2
+        module procedure h5_get_string
     end interface h5_get
 
     interface h5_add
@@ -34,6 +35,7 @@ module hdf5_tools
         module procedure h5_add_double_2, h5_add_double_3
         module procedure h5_add_double_4, h5_add_double_5
         module procedure h5_add_logical
+        module procedure h5_add_string
     end interface h5_add
 
     interface h5_get_bounds
@@ -222,6 +224,25 @@ contains
         value = temporary
     end subroutine h5_get_double_2
 
+    subroutine h5_get_string(h5id, dataset, value)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        character(len=*), intent(out) :: value
+        character(len=:), allocatable :: temporary
+        type(fortio_status_t) :: status
+        integer :: i, slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%read_text_scalar(joined_path(slot, dataset), &
+                                                     temporary, status)
+        call require_ok(status)
+        value = ""
+        do i = 1, min(len(value), len(temporary))
+            if (temporary(i:i) == achar(0)) exit
+            value(i:i) = temporary(i:i)
+        end do
+    end subroutine h5_get_string
+
     subroutine h5_get_bounds_1(h5id, dataset, lb1, ub1)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
@@ -312,6 +333,19 @@ contains
 
         call h5_add_int(h5id, dataset, merge(1, 0, value), comment, unit)
     end subroutine h5_add_logical
+
+    subroutine h5_add_string(h5id, dataset, value, comment, unit)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset, value
+        character(len=*), intent(in), optional :: comment, unit
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_WRITE)
+        call writers(root_slot(slot))%add_text_scalar(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_common_attributes(slot, dataset, comment, unit)
+    end subroutine h5_add_string
 
     subroutine h5_add_int_1_bounds(h5id, dataset, value, lbounds, ubounds, comment, unit)
         integer(HID_T), intent(in) :: h5id

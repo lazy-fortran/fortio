@@ -27,6 +27,7 @@ module fortio_hdf5_writer
         integer(int64), allocatable :: dimensions(:)
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
+        character(len=:), allocatable :: value_text
         type(hdf5_output_attribute_t), allocatable :: attributes(:)
         integer(int64) :: object_address = 0_int64
         integer(int64) :: data_address = 0_int64
@@ -57,6 +58,7 @@ module fortio_hdf5_writer
         procedure :: add_r64_3 => hdf5_add_r64_3
         procedure :: add_r64_4 => hdf5_add_r64_4
         procedure :: add_r64_5 => hdf5_add_r64_5
+        procedure :: add_text_scalar => hdf5_add_text_scalar
         procedure :: add_text_attribute => hdf5_add_text_attribute
         procedure :: add_i32_attribute => hdf5_add_i32_attribute
         procedure :: add_r64_attribute => hdf5_add_r64_attribute
@@ -140,6 +142,29 @@ contains
 
         call add_r64_flat(this, name, [integer(int64) ::], [value], status)
     end subroutine hdf5_add_r64_scalar
+
+    subroutine hdf5_add_text_scalar(this, name, value, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name, value
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_dataset_t) :: dataset
+        character(len=:), allocatable :: leaf_name
+        integer :: parent_group
+
+        if (.not. prepare_dataset(this, name, [integer(int64) ::], 1_int64, &
+                                  parent_group, leaf_name, status)) return
+        dataset%name = leaf_name
+        dataset%parent_group = parent_group
+        dataset%type_code = TYPE_TEXT
+        dataset%dimensions = [integer(int64) ::]
+        if (len_trim(value) == 0) then
+            dataset%value_text = achar(0)
+        else
+            dataset%value_text = value(:len_trim(value))
+        end if
+        allocate(dataset%attributes(0))
+        call append_dataset(this%datasets, dataset)
+    end subroutine hdf5_add_text_scalar
 
     subroutine hdf5_add_r64_1(this, name, values, status)
         class(hdf5_writer_t), intent(inout) :: this
@@ -555,6 +580,12 @@ contains
                     call writer%write_le_r64(this%datasets(i)%values_r64(j), status)
                     if (.not. status%ok()) return
                 end do
+            case (TYPE_TEXT)
+                do j = 1, len(this%datasets(i)%value_text)
+                    call writer%write_i8(int(iachar(this%datasets(i)%value_text(j:j)), int8), &
+                                         status)
+                    if (.not. status%ok()) return
+                end do
             end select
         end do
         call writer%close(status)
@@ -595,7 +626,14 @@ contains
         type(hdf5_output_dataset_t), intent(in) :: dataset
         integer :: datatype_size, i
 
-        datatype_size = merge(12, 20, dataset%type_code == TYPE_I32)
+        select case (dataset%type_code)
+        case (TYPE_I32)
+            datatype_size = 12
+        case (TYPE_R64)
+            datatype_size = 20
+        case (TYPE_TEXT)
+            datatype_size = 8
+        end select
         total = 4 + (4 + 8*size(dataset%dimensions)) + 4 + datatype_size + 4 + 18
         do i = 1, size(dataset%attributes)
             total = total + 4 + attribute_payload_size(dataset%attributes(i))
@@ -632,8 +670,10 @@ contains
 
         if (dataset%type_code == TYPE_I32) then
             total = 4_int64*size(dataset%values_i32, kind=int64)
-        else
+        else if (dataset%type_code == TYPE_R64) then
             total = 8_int64*size(dataset%values_r64, kind=int64)
+        else
+            total = len(dataset%value_text)
         end if
     end function dataset_data_size
 
@@ -731,12 +771,15 @@ contains
             call append_values(payload, [int(z'10', int8), int(z'08', int8), 0_int8, &
                 0_int8, 4_int8, 0_int8, 0_int8, 0_int8, 0_int8, 0_int8, &
                 int(z'20', int8), 0_int8])
-        else
+        else if (dataset%type_code == TYPE_R64) then
             call append_values(payload, [int(z'11', int8), int(z'20', int8), &
                 int(z'3f', int8), 0_int8, 8_int8, 0_int8, 0_int8, 0_int8, &
                 0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
                 int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
                 0_int8, 0_int8])
+        else
+            call append_values(payload, [int(z'13', int8), 0_int8, 0_int8, 0_int8])
+            call append_le32(payload, int(len(dataset%value_text), int32))
         end if
         call append_message(chunk, 3, 1, payload)
         deallocate(payload)
