@@ -66,7 +66,8 @@ module netcdf
 
     interface nf90_put_var
         module procedure put_char_scalar, put_char_rank1
-        module procedure put_i32_scalar, put_i32_rank1
+        module procedure put_i8_rank1
+        module procedure put_i32_scalar, put_i32_rank1, put_i32_rank2
         module procedure put_r64_scalar, put_r64_rank1, put_r64_rank2, put_r64_rank3
         module procedure put_r64_rank4
     end interface nf90_put_var
@@ -80,6 +81,7 @@ module netcdf
     interface nf90_put_att
         module procedure put_att_text
         module procedure put_att_i32_scalar, put_att_i32_rank1
+        module procedure put_att_i64_scalar
         module procedure put_att_r64_scalar, put_att_r64_rank1
     end interface nf90_put_att
 
@@ -88,6 +90,7 @@ module netcdf
     public :: nf90_inq_dimid, nf90_inquire_dimension, nf90_inquire_variable
     public :: nf90_inquire_attribute, nf90_get_att
     public :: nf90_put_att, nf90_redef, nf90_def_grp, nf90_inq_ncid
+    public :: nf90_def_var_deflate
 
 contains
 
@@ -230,6 +233,31 @@ contains
         call writers(ncid)%define_variable(name, type_code, dimension_ids, varid, status)
         code = finish_status(status)
     end function def_var_array
+
+    integer function nf90_def_var_deflate(ncid, varid, shuffle, deflate, &
+            deflate_level) result(code)
+        integer, intent(in) :: ncid, varid, shuffle, deflate, deflate_level
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        if (varid < 0 .or. varid >= size(writers(ncid)%variables)) then
+            code = NF90_ENOTVAR
+            return
+        end if
+        if (shuffle < 0 .or. shuffle > 1 .or. deflate < 0 .or. deflate > 1) then
+            code = NF90_EINVAL
+            return
+        end if
+        if (deflate_level < 0 .or. deflate_level > 9) then
+            code = NF90_EINVAL
+            return
+        end if
+        ! The current classic encoder has no representation for filters. Accept
+        ! the NetCDF-4 storage hint without changing the logical data model.
+        code = NF90_NOERR
+    end function nf90_def_var_deflate
 
     integer function nf90_enddef(ncid) result(code)
         integer, intent(in) :: ncid
@@ -574,6 +602,24 @@ contains
         code = finish_status(status)
     end function put_att_i32_rank1
 
+    integer function put_att_i64_scalar(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer(int64), intent(in) :: value
+        type(fortio_status_t) :: status
+
+        if (value < -9007199254740992_int64 .or. value > 9007199254740992_int64) then
+            code = NF90_EINVAL
+            return
+        end if
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_attribute_r64(varid, name, [real(value, real64)], status)
+        code = finish_status(status)
+    end function put_att_i64_scalar
+
     integer function put_att_r64_scalar(ncid, varid, name, value) result(code)
         integer, intent(in) :: ncid, varid
         character(len=*), intent(in) :: name
@@ -682,11 +728,11 @@ contains
         code = finish_status(status)
     end function get_r64_scalar
 
-    integer function get_r64_rank1(ncid, varid, value, start, count) result(code)
+    integer function get_r64_rank1(ncid, varid, value, start, count, map) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:)
-        integer, intent(in), optional :: start(:), count(:)
-        real(real64), allocatable :: temporary(:)
+        integer, intent(in), optional :: start(:), count(:), map(:)
+        real(real64), allocatable :: temporary(:), mapped(:)
         type(fortio_status_t) :: status
         integer :: first(1), last(1)
 
@@ -701,22 +747,38 @@ contains
             call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
         end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-            first, last, status)
-        if (status%ok()) value = temporary(first(1):last(1))
+            first, last, status, map)
+        if (status%ok()) then
+            if (present(map)) then
+                call map_r64_values(temporary(first(1):last(1)), &
+                    last - first + 1, map, size(value), mapped, status)
+                if (status%ok()) value = mapped
+            else
+                value = temporary(first(1):last(1))
+            end if
+        end if
         code = finish_status(status)
     end function get_r64_rank1
 
-    integer function get_r64_rank2(ncid, varid, value, start, count) result(code)
+    integer function get_r64_rank2(ncid, varid, value, start, count, map) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :)
-        integer, intent(in), optional :: start(:), count(:)
-        real(real64), allocatable :: temporary(:, :)
+        integer, intent(in), optional :: start(:), count(:), map(:)
+        real(real64), allocatable :: temporary(:, :), selected(:, :), mapped(:)
         type(fortio_status_t) :: status
         integer :: first(2), last(2)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
+        end if
+        if (.not. netcdf4_reading(ncid)) then
+            if (.not. present(start) .and. .not. present(count) .and. .not. present(map)) then
+                call files(ncid)%read_r64_2_into(files(ncid)%variables(varid)%name, &
+                    value, status)
+                code = finish_status(status)
+                return
+            end if
         end if
         if (netcdf4_reading(ncid)) then
             call netcdf4_files(ncid)%hdf5%read_r64_2( &
@@ -725,16 +787,25 @@ contains
             call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
         end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-            first, last, status)
-        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2))
+            first, last, status, map)
+        if (status%ok()) then
+            if (present(map)) then
+                selected = temporary(first(1):last(1), first(2):last(2))
+                call map_r64_values(reshape(selected, [size(selected)]), &
+                    shape(selected), map, size(value), mapped, status)
+                if (status%ok()) value = reshape(mapped, shape(value))
+            else
+                value = temporary(first(1):last(1), first(2):last(2))
+            end if
+        end if
         code = finish_status(status)
     end function get_r64_rank2
 
-    integer function get_r64_rank3(ncid, varid, value, start, count) result(code)
+    integer function get_r64_rank3(ncid, varid, value, start, count, map) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :, :)
-        integer, intent(in), optional :: start(:), count(:)
-        real(real64), allocatable :: temporary(:, :, :)
+        integer, intent(in), optional :: start(:), count(:), map(:)
+        real(real64), allocatable :: temporary(:, :, :), selected(:, :, :), mapped(:)
         type(fortio_status_t) :: status
         integer :: first(3), last(3)
 
@@ -749,17 +820,28 @@ contains
             call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
         end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-            first, last, status)
-        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
-            first(3):last(3))
+            first, last, status, map)
+        if (status%ok()) then
+            if (present(map)) then
+                selected = temporary(first(1):last(1), first(2):last(2), &
+                    first(3):last(3))
+                call map_r64_values(reshape(selected, [size(selected)]), &
+                    shape(selected), map, size(value), mapped, status)
+                if (status%ok()) value = reshape(mapped, shape(value))
+            else
+                value = temporary(first(1):last(1), first(2):last(2), &
+                    first(3):last(3))
+            end if
+        end if
         code = finish_status(status)
     end function get_r64_rank3
 
-    integer function get_r64_rank4(ncid, varid, value, start, count) result(code)
+    integer function get_r64_rank4(ncid, varid, value, start, count, map) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :, :, :)
-        integer, intent(in), optional :: start(:), count(:)
-        real(real64), allocatable :: temporary(:, :, :, :)
+        integer, intent(in), optional :: start(:), count(:), map(:)
+        real(real64), allocatable :: temporary(:, :, :, :), selected(:, :, :, :)
+        real(real64), allocatable :: mapped(:)
         type(fortio_status_t) :: status
         integer :: first(4), last(4)
 
@@ -774,9 +856,19 @@ contains
             call files(ncid)%read_r64_4(files(ncid)%variables(varid)%name, temporary, status)
         end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-            first, last, status)
-        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
-            first(3):last(3), first(4):last(4))
+            first, last, status, map)
+        if (status%ok()) then
+            if (present(map)) then
+                selected = temporary(first(1):last(1), first(2):last(2), &
+                    first(3):last(3), first(4):last(4))
+                call map_r64_values(reshape(selected, [size(selected)]), &
+                    shape(selected), map, size(value), mapped, status)
+                if (status%ok()) value = reshape(mapped, shape(value))
+            else
+                value = temporary(first(1):last(1), first(2):last(2), &
+                    first(3):last(3), first(4):last(4))
+            end if
+        end if
         code = finish_status(status)
     end function get_r64_rank4
 
@@ -792,6 +884,19 @@ contains
         call writers(ncid)%put_i32_scalar(varid, value, status)
         code = finish_status(status)
     end function put_i32_scalar
+
+    integer function put_i8_rank1(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int8), intent(in) :: value(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_i8_1(varid, value, status)
+        code = finish_status(status)
+    end function put_i8_rank1
 
     integer function put_char_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
@@ -832,6 +937,19 @@ contains
         code = finish_status(status)
     end function put_i32_rank1
 
+    integer function put_i32_rank2(ncid, varid, value) result(code)
+        integer, intent(in) :: ncid, varid
+        integer(int32), intent(in) :: value(:, :)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_i32_2(varid, value, status)
+        code = finish_status(status)
+    end function put_i32_rank2
+
     integer function put_r64_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(in) :: value
@@ -845,16 +963,25 @@ contains
         code = finish_status(status)
     end function put_r64_scalar
 
-    integer function put_r64_rank1(ncid, varid, value) result(code)
+    integer function put_r64_rank1(ncid, varid, value, start, count) result(code)
         integer, intent(in) :: ncid, varid
         real(real64), intent(in) :: value(:)
+        integer, intent(in), optional :: start(:), count(:)
         type(fortio_status_t) :: status
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
             return
         end if
-        call writers(ncid)%put_r64_1(varid, value, status)
+        if (present(start) .neqv. present(count)) then
+            code = NF90_EINVAL
+            return
+        end if
+        if (present(start)) then
+            call writers(ncid)%put_r64_slice(varid, value, start, count, status)
+        else
+            call writers(ncid)%put_r64_1(varid, value, status)
+        end if
         code = finish_status(status)
     end function put_r64_rank1
 
@@ -1282,11 +1409,12 @@ contains
     end function inquire_netcdf4_variable
 
     subroutine resolve_slice(source_shape, destination_shape, start, count, first, last, &
-            status)
+            status, map)
         integer, intent(in) :: source_shape(:), destination_shape(:)
-        integer, intent(in), optional :: start(:), count(:)
+        integer, intent(in), optional :: start(:), count(:), map(:)
         integer, intent(out) :: first(:), last(:)
         type(fortio_status_t), intent(inout) :: status
+        integer :: requested(size(source_shape))
         integer :: i
 
         call status%clear()
@@ -1307,18 +1435,46 @@ contains
                 call status%set(NF90_EINVAL, "count rank does not match variable")
                 return
             end if
-            if (any(count /= destination_shape)) then
-                call status%set(NF90_EINVAL, "count does not match destination shape")
-                return
+            requested = count
+            if (present(map)) then
+                if (product(count) /= product(destination_shape)) then
+                    call status%set(NF90_EINVAL, &
+                        "mapped count does not match destination size")
+                    return
+                end if
+            else
+                if (any(count /= destination_shape)) then
+                    call status%set(NF90_EINVAL, "count does not match destination shape")
+                    return
+                end if
             end if
         else
-            if (any(destination_shape /= source_shape)) then
-                call status%set(NF90_EINVAL, &
-                    "partial destination requires an explicit count")
+            requested = source_shape
+            if (present(map)) then
+                if (product(destination_shape) /= product(source_shape)) then
+                    call status%set(NF90_EINVAL, &
+                        "mapped destination size does not match variable")
+                    return
+                end if
+            else
+                if (any(destination_shape /= source_shape)) then
+                    call status%set(NF90_EINVAL, &
+                        "partial destination requires an explicit count")
+                    return
+                end if
+            end if
+        end if
+        if (present(map)) then
+            if (size(map) /= size(source_shape)) then
+                call status%set(NF90_EINVAL, "map rank does not match variable")
+                return
+            end if
+            if (any(map < 1)) then
+                call status%set(NF90_ENOTSUPPORT, "non-positive map strides are unsupported")
                 return
             end if
         end if
-        last = first + destination_shape - 1
+        last = first + requested - 1
         do i = 1, size(first)
             if (first(i) < 1 .or. last(i) > source_shape(i)) then
                 call status%set(NF90_EINVAL, "requested hyperslab is outside the variable")
@@ -1326,6 +1482,39 @@ contains
             end if
         end do
     end subroutine resolve_slice
+
+    subroutine map_r64_values(source, counts, map, output_size, output, status)
+        real(real64), intent(in) :: source(:)
+        integer, intent(in) :: counts(:), map(:), output_size
+        real(real64), allocatable, intent(out) :: output(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: coordinate, dimension, linear, output_index, remaining
+
+        call status%clear()
+        if (size(counts) /= size(map)) then
+            call status%set(NF90_EINVAL, "map rank does not match count")
+            return
+        end if
+        if (product(counts) /= size(source)) then
+            call status%set(NF90_EINVAL, "mapped source size does not match count")
+            return
+        end if
+        allocate(output(output_size), source=0.0_real64)
+        do linear = 1, size(source)
+            remaining = linear - 1
+            output_index = 1
+            do dimension = 1, size(counts)
+                coordinate = mod(remaining, counts(dimension))
+                remaining = remaining/counts(dimension)
+                output_index = output_index + coordinate*map(dimension)
+            end do
+            if (output_index < 1 .or. output_index > output_size) then
+                call status%set(NF90_EINVAL, "map addresses outside destination")
+                return
+            end if
+            output(output_index) = source(linear)
+        end do
+    end subroutine map_r64_values
 
     integer function find_attribute(ncid, varid, name, attribute_id) result(code)
         integer, intent(in) :: ncid, varid
