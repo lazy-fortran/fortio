@@ -1,11 +1,13 @@
 module netcdf
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: decode_be_i32, decode_be_i64
-    use fortio_netcdf_classic, only: classic_file_t, NC_BYTE, NC_CHAR, NC_SHORT, &
-                                    NC_INT, NC_FLOAT, NC_DOUBLE
+    use fortio_netcdf_classic, only: classic_file_t, classic_dimension_t, &
+        classic_variable_t, NC_BYTE, NC_CHAR, NC_SHORT, &
+        NC_INT, NC_FLOAT, NC_DOUBLE
+    use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
-                            FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST
+        FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST
     implicit none
     private
 
@@ -36,10 +38,17 @@ module netcdf
     integer, parameter, public :: NF90_STRING = 12
 
     integer, parameter :: MAX_OPEN_FILES = 32
+    type :: netcdf4_file_t
+        type(hdf5_file_t) :: hdf5
+        type(classic_dimension_t), allocatable :: dimensions(:)
+        type(classic_variable_t), allocatable :: variables(:)
+    end type netcdf4_file_t
     type(classic_file_t), save :: files(MAX_OPEN_FILES)
+    type(netcdf4_file_t), save :: netcdf4_files(MAX_OPEN_FILES)
     type(classic_writer_t), save :: writers(MAX_OPEN_FILES)
     logical, save :: in_use(MAX_OPEN_FILES) = .false.
     logical, save :: writing(MAX_OPEN_FILES) = .false.
+    logical, save :: netcdf4_reading(MAX_OPEN_FILES) = .false.
     character(len=512), save :: last_error = ""
 
     interface nf90_get_var
@@ -100,11 +109,17 @@ contains
             return
         end if
         call files(slot)%open(path, status)
-        code = status%code
         if (.not. status%ok()) then
-            last_error = status%message
-            return
+            call netcdf4_files(slot)%hdf5%open(path, status)
+            if (status%ok()) call load_netcdf4_metadata(netcdf4_files(slot), status)
+            if (.not. status%ok()) then
+                code = status%code
+                last_error = status%message
+                return
+            end if
+            netcdf4_reading(slot) = .true.
         end if
+        code = NF90_NOERR
         in_use(slot) = .true.
         ncid = slot
     end function nf90_open
@@ -155,11 +170,18 @@ contains
         end if
         if (writing(ncid)) then
             call writers(ncid)%close(status)
+        else if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%close(status)
+            if (allocated(netcdf4_files(ncid)%dimensions)) &
+                deallocate(netcdf4_files(ncid)%dimensions)
+            if (allocated(netcdf4_files(ncid)%variables)) &
+                deallocate(netcdf4_files(ncid)%variables)
         else
             call files(ncid)%close(status)
         end if
         in_use(ncid) = .false.
         writing(ncid) = .false.
+        netcdf4_reading(ncid) = .false.
         code = status%code
         if (.not. status%ok()) last_error = status%message
     end function nf90_close
@@ -177,7 +199,7 @@ contains
             return
         end if
         call writers(ncid)%define_dimension(name, int(length, int64), &
-                                            length == NF90_UNLIMITED, dimid, status)
+            length == NF90_UNLIMITED, dimid, status)
         code = finish_status(status)
     end function nf90_def_dim
 
@@ -190,7 +212,7 @@ contains
     end function def_var_scalar
 
     integer function def_var_one_dimension(ncid, name, type_code, dimension_id, &
-                                           varid) result(code)
+            varid) result(code)
         integer, intent(in) :: ncid, type_code, dimension_id
         character(len=*), intent(in) :: name
         integer, intent(out) :: varid
@@ -284,7 +306,11 @@ contains
                 return
             end if
         else
-            varid = files(ncid)%variable_id(name)
+            if (netcdf4_reading(ncid)) then
+                varid = netcdf4_variable_id(netcdf4_files(ncid), name)
+            else
+                varid = files(ncid)%variable_id(name)
+            end if
             if (varid == 0) then
                 code = NF90_ENOTVAR
                 varid = -1
@@ -304,7 +330,11 @@ contains
             dimid = -1
             return
         end if
-        dimid = files(ncid)%dimension_id(name)
+        if (netcdf4_reading(ncid)) then
+            dimid = netcdf4_dimension_id(netcdf4_files(ncid), name)
+        else
+            dimid = files(ncid)%dimension_id(name)
+        end if
         if (dimid == 0) then
             code = NF90_EBADDIM
             dimid = -1
@@ -320,6 +350,16 @@ contains
 
         if (.not. valid_reader(ncid)) then
             code = NF90_EBADID
+            return
+        end if
+        if (netcdf4_reading(ncid)) then
+            if (dimid < 1 .or. dimid > size(netcdf4_files(ncid)%dimensions)) then
+                code = NF90_EBADDIM
+                return
+            end if
+            if (present(name)) name = netcdf4_files(ncid)%dimensions(dimid)%name
+            if (present(len)) len = int(netcdf4_files(ncid)%dimensions(dimid)%length)
+            code = NF90_NOERR
             return
         end if
         if (dimid < 1 .or. dimid > size(files(ncid)%dimensions)) then
@@ -338,7 +378,7 @@ contains
     end function nf90_inquire_dimension
 
     integer function nf90_inquire_variable(ncid, varid, name, xtype, ndims, dimids, &
-                                           natts) result(code)
+            natts) result(code)
         integer, intent(in) :: ncid, varid
         character(len=*), intent(out), optional :: name
         integer, intent(out), optional :: xtype, ndims, dimids(:), natts
@@ -346,6 +386,11 @@ contains
 
         if (.not. valid_reader(ncid)) then
             code = NF90_EBADID
+            return
+        end if
+        if (netcdf4_reading(ncid)) then
+            code = inquire_netcdf4_variable(netcdf4_files(ncid), varid, name, xtype, &
+                ndims, dimids, natts)
             return
         end if
         if (varid < 1 .or. varid > size(files(ncid)%variables)) then
@@ -565,7 +610,12 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_i32_scalar(files(ncid)%variables(varid)%name, value, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_i32_scalar( &
+                netcdf4_files(ncid)%variables(varid)%name, value, status)
+        else
+            call files(ncid)%read_i32_scalar(files(ncid)%variables(varid)%name, value, status)
+        end if
         code = finish_status(status)
     end function get_i32_scalar
 
@@ -607,9 +657,14 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_i32_1(files(ncid)%variables(varid)%name, temporary, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_i32_1( &
+                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+        else
+            call files(ncid)%read_i32_1(files(ncid)%variables(varid)%name, temporary, status)
+        end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-                                            first, last, status)
+            first, last, status)
         if (status%ok()) value = temporary(first(1):last(1))
         code = finish_status(status)
     end function get_i32_rank1
@@ -623,7 +678,12 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_r64_scalar(files(ncid)%variables(varid)%name, value, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_r64_scalar( &
+                netcdf4_files(ncid)%variables(varid)%name, value, status)
+        else
+            call files(ncid)%read_r64_scalar(files(ncid)%variables(varid)%name, value, status)
+        end if
         code = finish_status(status)
     end function get_r64_scalar
 
@@ -639,9 +699,14 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_r64_1( &
+                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+        else
+            call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
+        end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-                                            first, last, status)
+            first, last, status)
         if (status%ok()) value = temporary(first(1):last(1))
         code = finish_status(status)
     end function get_r64_rank1
@@ -658,9 +723,14 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_r64_2( &
+                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+        else
+            call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
+        end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-                                            first, last, status)
+            first, last, status)
         if (status%ok()) value = temporary(first(1):last(1), first(2):last(2))
         code = finish_status(status)
     end function get_r64_rank2
@@ -677,11 +747,16 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_r64_3( &
+                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+        else
+            call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
+        end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-                                            first, last, status)
+            first, last, status)
         if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
-                                            first(3):last(3))
+            first(3):last(3))
         code = finish_status(status)
     end function get_r64_rank3
 
@@ -697,11 +772,16 @@ contains
             code = status%code
             return
         end if
-        call files(ncid)%read_r64_4(files(ncid)%variables(varid)%name, temporary, status)
+        if (netcdf4_reading(ncid)) then
+            call netcdf4_files(ncid)%hdf5%read_r64_4( &
+                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+        else
+            call files(ncid)%read_r64_4(files(ncid)%variables(varid)%name, temporary, status)
+        end if
         if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
-                                            first, last, status)
+            first, last, status)
         if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
-                                            first(3):last(3), first(4):last(4))
+            first(3):last(3), first(4):last(4))
         code = finish_status(status)
     end function get_r64_rank4
 
@@ -905,12 +985,177 @@ contains
             return
         end if
         prepare_get = varid >= 1
-        if (prepare_get) prepare_get = varid <= size(files(ncid)%variables)
+        if (prepare_get) then
+            if (netcdf4_reading(ncid)) then
+                prepare_get = varid <= size(netcdf4_files(ncid)%variables)
+            else
+                prepare_get = varid <= size(files(ncid)%variables)
+            end if
+        end if
         if (.not. prepare_get) call status%set(NF90_ENOTVAR, "invalid variable ID")
     end function prepare_get
 
+    subroutine load_netcdf4_metadata(file, status)
+        type(netcdf4_file_t), intent(inout) :: file
+        type(fortio_status_t), intent(inout) :: status
+        character(len=:), allocatable :: names(:)
+        logical, allocatable :: group_flags(:)
+        type(hdf5_attribute_t), allocatable :: attributes(:)
+        integer(int64), allocatable :: dimensions(:)
+        logical :: is_group
+        integer :: i, dimension_id, maximum_dimension_id
+        integer :: type_class, element_size
+
+        call status%clear()
+        call file%hdf5%list_children("", names, group_flags, status)
+        if (.not. status%ok()) return
+        maximum_dimension_id = -1
+        do i = 1, size(names)
+            if (group_flags(i)) cycle
+            call file%hdf5%get_attributes(names(i), attributes, status)
+            if (.not. status%ok()) return
+            dimension_id = netcdf4_coordinate_id(attributes, "_Netcdf4Dimid")
+            maximum_dimension_id = max(maximum_dimension_id, dimension_id)
+        end do
+        allocate(file%dimensions(maximum_dimension_id + 1))
+        allocate(file%variables(0))
+        do i = 1, size(names)
+            if (group_flags(i)) cycle
+            call file%hdf5%get_attributes(names(i), attributes, status)
+            if (.not. status%ok()) return
+            dimension_id = netcdf4_coordinate_id(attributes, "_Netcdf4Dimid")
+            call file%hdf5%describe(names(i), is_group, type_class, dimensions, status, &
+                element_size)
+            if (.not. status%ok()) return
+            if (dimension_id >= 0) then
+                file%dimensions(dimension_id + 1)%name = names(i)
+                if (size(dimensions) /= 1) then
+                    call status%set(NF90_EINVAL, "NetCDF-4 dimension scale is not rank one")
+                    return
+                end if
+                file%dimensions(dimension_id + 1)%length = dimensions(1)
+            else
+                call append_netcdf4_variable(file, names(i), type_class, element_size, &
+                    attributes, status)
+                if (.not. status%ok()) return
+            end if
+        end do
+    end subroutine load_netcdf4_metadata
+
+    integer function netcdf4_coordinate_id(attributes, name) result(id)
+        type(hdf5_attribute_t), intent(in) :: attributes(:)
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        id = -1
+        do i = 1, size(attributes)
+            if (attributes(i)%name /= name) cycle
+            if (.not. allocated(attributes(i)%values_i32)) return
+            if (size(attributes(i)%values_i32) /= 1) return
+            id = int(attributes(i)%values_i32(1))
+            return
+        end do
+    end function netcdf4_coordinate_id
+
+    subroutine append_netcdf4_variable(file, name, type_class, element_size, attributes, &
+            status)
+        type(netcdf4_file_t), intent(inout) :: file
+        character(len=*), intent(in) :: name
+        integer, intent(in) :: type_class, element_size
+        type(hdf5_attribute_t), intent(in) :: attributes(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(classic_variable_t), allocatable :: temporary(:)
+        integer :: count, i
+
+        count = size(file%variables)
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = file%variables
+        temporary(count + 1)%name = name
+        temporary(count + 1)%type_code = netcdf4_type_code(type_class, element_size)
+        if (temporary(count + 1)%type_code == 0) then
+            call status%set(NF90_ENOTSUPPORT, "NetCDF-4 variable datatype is not required")
+            return
+        end if
+        allocate(temporary(count + 1)%dimension_ids(0))
+        do i = 1, size(attributes)
+            if (attributes(i)%name /= "_Netcdf4Coordinates") cycle
+            if (.not. allocated(attributes(i)%values_i32)) cycle
+            temporary(count + 1)%dimension_ids = int(attributes(i)%values_i32)
+            exit
+        end do
+        temporary(count + 1)%attribute_count = 0
+        allocate(temporary(count + 1)%attributes(0))
+        call move_alloc(temporary, file%variables)
+    end subroutine append_netcdf4_variable
+
+    pure integer function netcdf4_type_code(type_class, element_size) result(type_code)
+        integer, intent(in) :: type_class, element_size
+
+        type_code = 0
+        if (type_class == 0 .and. element_size == 4) type_code = NF90_INT
+        if (type_class == 1 .and. element_size == 4) type_code = NF90_FLOAT
+        if (type_class == 1 .and. element_size == 8) type_code = NF90_DOUBLE
+    end function netcdf4_type_code
+
+    integer function netcdf4_variable_id(file, name) result(variable_id)
+        type(netcdf4_file_t), intent(in) :: file
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        variable_id = 0
+        do i = 1, size(file%variables)
+            if (file%variables(i)%name == trim(name)) then
+                variable_id = i
+                return
+            end if
+        end do
+    end function netcdf4_variable_id
+
+    integer function netcdf4_dimension_id(file, name) result(dimension_id)
+        type(netcdf4_file_t), intent(in) :: file
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        dimension_id = 0
+        do i = 1, size(file%dimensions)
+            if (file%dimensions(i)%name == trim(name)) then
+                dimension_id = i
+                return
+            end if
+        end do
+    end function netcdf4_dimension_id
+
+    integer function inquire_netcdf4_variable(file, varid, name, xtype, ndims, dimids, &
+            natts) result(code)
+        type(netcdf4_file_t), intent(in) :: file
+        integer, intent(in) :: varid
+        character(len=*), intent(out), optional :: name
+        integer, intent(out), optional :: xtype, ndims, dimids(:), natts
+        integer :: rank, i
+
+        if (varid < 1 .or. varid > size(file%variables)) then
+            code = NF90_ENOTVAR
+            return
+        end if
+        rank = size(file%variables(varid)%dimension_ids)
+        if (present(name)) name = file%variables(varid)%name
+        if (present(xtype)) xtype = file%variables(varid)%type_code
+        if (present(ndims)) ndims = rank
+        if (present(natts)) natts = 0
+        if (present(dimids)) then
+            if (size(dimids) < rank) then
+                code = NF90_EINVAL
+                return
+            end if
+            do i = 1, rank
+                dimids(i) = file%variables(varid)%dimension_ids(rank - i + 1) + 1
+            end do
+        end if
+        code = NF90_NOERR
+    end function inquire_netcdf4_variable
+
     subroutine resolve_slice(source_shape, destination_shape, start, count, first, last, &
-                             status)
+            status)
         integer, intent(in) :: source_shape(:), destination_shape(:)
         integer, intent(in), optional :: start(:), count(:)
         integer, intent(out) :: first(:), last(:)
@@ -942,7 +1187,7 @@ contains
         else
             if (any(destination_shape /= source_shape)) then
                 call status%set(NF90_EINVAL, &
-                                "partial destination requires an explicit count")
+                    "partial destination requires an explicit count")
                 return
             end if
         end if
@@ -1021,7 +1266,7 @@ contains
     end function attribute_byte
 
     integer(int32) function decode_attribute_i32(ncid, varid, attribute_id, element, &
-                                                 width) result(value)
+            width) result(value)
         integer, intent(in) :: ncid, varid, attribute_id, element, width
         integer(int8) :: bytes4(4)
         integer :: i, offset
@@ -1030,7 +1275,7 @@ contains
         offset = width*(element - 1)
         do i = 1, width
             bytes4(4 - width + i) = int(attribute_byte(ncid, varid, attribute_id, &
-                                                       offset + i), int8)
+                offset + i), int8)
         end do
         value = decode_be_i32(bytes4)
         if (width == 2 .and. value >= 32768) value = value - 65536
