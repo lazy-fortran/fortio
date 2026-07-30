@@ -9,7 +9,16 @@ module fortio_hdf5_writer
 
     integer, parameter :: TYPE_I32 = 1
     integer, parameter :: TYPE_R64 = 2
+    integer, parameter :: TYPE_TEXT = 3
     integer(int64), parameter :: ROOT_ADDRESS = 48_int64
+
+    type :: hdf5_output_attribute_t
+        character(len=:), allocatable :: name
+        integer :: type_code = 0
+        integer(int32), allocatable :: values_i32(:)
+        real(real64), allocatable :: values_r64(:)
+        character(len=:), allocatable :: value_text
+    end type hdf5_output_attribute_t
 
     type :: hdf5_output_dataset_t
         character(len=:), allocatable :: name
@@ -18,6 +27,7 @@ module fortio_hdf5_writer
         integer(int64), allocatable :: dimensions(:)
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
+        type(hdf5_output_attribute_t), allocatable :: attributes(:)
         integer(int64) :: object_address = 0_int64
         integer(int64) :: data_address = 0_int64
     end type hdf5_output_dataset_t
@@ -47,6 +57,9 @@ module fortio_hdf5_writer
         procedure :: add_r64_3 => hdf5_add_r64_3
         procedure :: add_r64_4 => hdf5_add_r64_4
         procedure :: add_r64_5 => hdf5_add_r64_5
+        procedure :: add_text_attribute => hdf5_add_text_attribute
+        procedure :: add_i32_attribute => hdf5_add_i32_attribute
+        procedure :: add_r64_attribute => hdf5_add_r64_attribute
         procedure :: close => hdf5_writer_close
     end type hdf5_writer_t
 
@@ -195,6 +208,7 @@ contains
         dataset%type_code = TYPE_I32
         dataset%dimensions = dimensions
         dataset%values_i32 = values
+        allocate(dataset%attributes(0))
         call append_dataset(this%datasets, dataset)
     end subroutine add_i32_flat
 
@@ -216,8 +230,111 @@ contains
         dataset%type_code = TYPE_R64
         dataset%dimensions = dimensions
         dataset%values_r64 = values
+        allocate(dataset%attributes(0))
         call append_dataset(this%datasets, dataset)
     end subroutine add_r64_flat
+
+    subroutine hdf5_add_text_attribute(this, dataset_name, name, value, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: dataset_name, name, value
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_attribute_t) :: attribute
+        integer :: dataset_id
+
+        call find_dataset(this, dataset_name, dataset_id, status)
+        if (.not. status%ok()) return
+        attribute%name = trim(name)
+        attribute%type_code = TYPE_TEXT
+        attribute%value_text = value
+        call append_attribute(this%datasets(dataset_id)%attributes, attribute, status)
+    end subroutine hdf5_add_text_attribute
+
+    subroutine hdf5_add_i32_attribute(this, dataset_name, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: dataset_name, name
+        integer(int32), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_attribute_t) :: attribute
+        integer :: dataset_id
+
+        call find_dataset(this, dataset_name, dataset_id, status)
+        if (.not. status%ok()) return
+        attribute%name = trim(name)
+        attribute%type_code = TYPE_I32
+        attribute%values_i32 = values
+        call append_attribute(this%datasets(dataset_id)%attributes, attribute, status)
+    end subroutine hdf5_add_i32_attribute
+
+    subroutine hdf5_add_r64_attribute(this, dataset_name, name, value, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: dataset_name, name
+        real(real64), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_attribute_t) :: attribute
+        integer :: dataset_id
+
+        call find_dataset(this, dataset_name, dataset_id, status)
+        if (.not. status%ok()) return
+        attribute%name = trim(name)
+        attribute%type_code = TYPE_R64
+        attribute%values_r64 = [value]
+        call append_attribute(this%datasets(dataset_id)%attributes, attribute, status)
+    end subroutine hdf5_add_r64_attribute
+
+    subroutine find_dataset(this, name, dataset_id, status)
+        class(hdf5_writer_t), intent(in) :: this
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: dataset_id
+        type(fortio_status_t), intent(inout) :: status
+        character(len=:), allocatable :: normalized, parent_path, leaf_name
+        integer :: i, parent_group, separator
+
+        call status%clear()
+        normalized = normalized_path(name)
+        separator = scan(normalized, "/", back=.true.)
+        if (separator == 0) then
+            parent_path = ""
+            leaf_name = normalized
+        else
+            parent_path = normalized(:separator - 1)
+            leaf_name = normalized(separator + 1:)
+        end if
+        parent_group = group_by_path(this%groups, parent_path)
+        dataset_id = 0
+        do i = 1, size(this%datasets)
+            if (this%datasets(i)%parent_group == parent_group) then
+                if (this%datasets(i)%name == leaf_name) then
+                    dataset_id = i
+                    return
+                end if
+            end if
+        end do
+        call status%set(FORTIO_ESTATE, "HDF5 attribute dataset does not exist")
+    end subroutine find_dataset
+
+    subroutine append_attribute(attributes, attribute, status)
+        type(hdf5_output_attribute_t), allocatable, intent(inout) :: attributes(:)
+        type(hdf5_output_attribute_t), intent(in) :: attribute
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_attribute_t), allocatable :: temporary(:)
+        integer :: count, i
+
+        if (len(attribute%name) == 0 .or. len(attribute%name) > 255) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 attribute name is not supported")
+            return
+        end if
+        do i = 1, size(attributes)
+            if (attributes(i)%name == attribute%name) then
+                call status%set(FORTIO_ESTATE, "duplicate HDF5 attribute name")
+                return
+            end if
+        end do
+        count = size(attributes)
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = attributes
+        temporary(count + 1) = attribute
+        call move_alloc(temporary, attributes)
+    end subroutine append_attribute
 
     logical function prepare_dataset(this, name, dimensions, count, parent_group, &
                                      leaf_name, status)
@@ -467,18 +584,48 @@ contains
     integer(int64) function dataset_header_size(dataset) result(total)
         type(hdf5_output_dataset_t), intent(in) :: dataset
         integer(int64) :: chunk_size
+        integer :: width
 
         chunk_size = dataset_chunk_size(dataset)
-        total = 7 + chunk_size + 4
+        width = merge(1, 2, chunk_size <= 255)
+        total = 6 + width + chunk_size + 4
     end function dataset_header_size
 
     integer(int64) function dataset_chunk_size(dataset) result(total)
         type(hdf5_output_dataset_t), intent(in) :: dataset
-        integer :: datatype_size
+        integer :: datatype_size, i
 
         datatype_size = merge(12, 20, dataset%type_code == TYPE_I32)
         total = 4 + (4 + 8*size(dataset%dimensions)) + 4 + datatype_size + 4 + 18
+        do i = 1, size(dataset%attributes)
+            total = total + 4 + attribute_payload_size(dataset%attributes(i))
+        end do
     end function dataset_chunk_size
+
+    integer(int64) function attribute_payload_size(attribute) result(total)
+        type(hdf5_output_attribute_t), intent(in) :: attribute
+        integer :: datatype_size, dataspace_size, data_size
+
+        select case (attribute%type_code)
+        case (TYPE_TEXT)
+            datatype_size = 8
+            dataspace_size = 4
+            data_size = max(1, len_trim(attribute%value_text))
+        case (TYPE_I32)
+            datatype_size = 12
+            dataspace_size = 12
+            data_size = 4*size(attribute%values_i32)
+        case (TYPE_R64)
+            datatype_size = 20
+            dataspace_size = 4
+            data_size = 8
+        case default
+            datatype_size = 0
+            dataspace_size = 0
+            data_size = 0
+        end select
+        total = 9 + len(attribute%name) + 1 + datatype_size + dataspace_size + data_size
+    end function attribute_payload_size
 
     integer(int64) function dataset_data_size(dataset) result(total)
         type(hdf5_output_dataset_t), intent(in) :: dataset
@@ -567,7 +714,7 @@ contains
         type(hdf5_output_dataset_t), intent(in) :: dataset
         integer(int8), allocatable :: bytes(:), chunk(:), payload(:)
         integer(int64) :: chunk_size
-        integer :: i
+        integer :: i, width, flags
 
         allocate(chunk(0), payload(0))
         call append_u8(payload, 2)
@@ -599,15 +746,82 @@ contains
         call append_le64(payload, dataset%data_address)
         call append_le64(payload, dataset_data_size(dataset))
         call append_message(chunk, 8, 0, payload)
+        do i = 1, size(dataset%attributes)
+            payload = make_attribute_payload(dataset%attributes(i))
+            call append_message(chunk, 12, 0, payload)
+        end do
         chunk_size = size(chunk, kind=int64)
+        width = merge(1, 2, chunk_size <= 255)
+        flags = merge(0, 1, width == 1)
         allocate(bytes(0))
         call append_text(bytes, "OHDR")
         call append_u8(bytes, 2)
-        call append_u8(bytes, 0)
-        call append_u8(bytes, int(chunk_size))
+        call append_u8(bytes, flags)
+        call append_unsigned(bytes, chunk_size, width)
         call append_values(bytes, chunk)
         call append_checksum(bytes)
     end function make_dataset_header
+
+    function make_attribute_payload(attribute) result(payload)
+        type(hdf5_output_attribute_t), intent(in) :: attribute
+        integer(int8), allocatable :: payload(:)
+        integer :: i, text_size
+
+        allocate(payload(0))
+        call append_u8(payload, 3)
+        call append_u8(payload, 0)
+        call append_le16(payload, len(attribute%name) + 1)
+        select case (attribute%type_code)
+        case (TYPE_TEXT)
+            call append_le16(payload, 8)
+            call append_le16(payload, 4)
+        case (TYPE_I32)
+            call append_le16(payload, 12)
+            call append_le16(payload, 12)
+        case (TYPE_R64)
+            call append_le16(payload, 20)
+            call append_le16(payload, 4)
+        end select
+        call append_u8(payload, 0)
+        call append_text(payload, attribute%name)
+        call append_u8(payload, 0)
+        select case (attribute%type_code)
+        case (TYPE_TEXT)
+            text_size = max(1, len_trim(attribute%value_text))
+            call append_values(payload, [int(z'13', int8), 1_int8, 0_int8, 0_int8])
+            call append_le32(payload, int(text_size, int32))
+        case (TYPE_I32)
+            call append_values(payload, [int(z'10', int8), int(z'08', int8), 0_int8, &
+                0_int8, 4_int8, 0_int8, 0_int8, 0_int8, 0_int8, 0_int8, &
+                int(z'20', int8), 0_int8])
+        case (TYPE_R64)
+            call append_values(payload, [int(z'11', int8), int(z'20', int8), &
+                int(z'3f', int8), 0_int8, 8_int8, 0_int8, 0_int8, 0_int8, &
+                0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
+                int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
+                0_int8, 0_int8])
+        end select
+        if (attribute%type_code == TYPE_I32) then
+            call append_values(payload, [2_int8, 1_int8, 0_int8, 1_int8])
+            call append_le64(payload, int(size(attribute%values_i32), int64))
+        else
+            call append_values(payload, [2_int8, 0_int8, 0_int8, 0_int8])
+        end if
+        select case (attribute%type_code)
+        case (TYPE_TEXT)
+            if (len_trim(attribute%value_text) == 0) then
+                call append_u8(payload, 0)
+            else
+                call append_text(payload, attribute%value_text(:len_trim(attribute%value_text)))
+            end if
+        case (TYPE_I32)
+            do i = 1, size(attribute%values_i32)
+                call append_le32(payload, attribute%values_i32(i))
+            end do
+        case (TYPE_R64)
+            call append_le_r64(payload, attribute%values_r64(1))
+        end select
+    end function make_attribute_payload
 
     subroutine append_message(bytes, message_type, flags, payload)
         integer(int8), allocatable, intent(inout) :: bytes(:)
@@ -677,6 +891,13 @@ contains
         end do
         call append_values(bytes, values)
     end subroutine append_le64
+
+    subroutine append_le_r64(bytes, value)
+        integer(int8), allocatable, intent(inout) :: bytes(:)
+        real(real64), intent(in) :: value
+
+        call append_le64(bytes, transfer(value, 0_int64))
+    end subroutine append_le_r64
 
     subroutine append_unsigned(bytes, value, width)
         integer(int8), allocatable, intent(inout) :: bytes(:)

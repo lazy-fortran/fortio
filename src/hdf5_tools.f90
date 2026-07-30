@@ -227,6 +227,7 @@ contains
         call writers(root_slot(slot))%add_i32_scalar(joined_path(slot, dataset), &
                                                      int(value, int32), status)
         call require_ok(status)
+        call add_common_attributes(slot, dataset, comment, unit)
     end subroutine h5_add_int
 
     subroutine h5_add_logical(h5id, dataset, value, comment, unit)
@@ -246,16 +247,31 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         call add_int_1(h5id, dataset, value)
+        call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, lbounds, ubounds)
+        call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
     end subroutine h5_add_int_1_bounds
 
     subroutine h5_add_int_1_nobounds(h5id, dataset, value, comment, unit, default)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
-        integer, intent(in) :: value(:)
+        integer, allocatable, intent(in) :: value(:)
         character(len=*), intent(in), optional :: comment, unit
         integer, intent(in), optional :: default
 
-        call add_int_1(h5id, dataset, value)
+        if (allocated(value)) then
+            call add_int_1(h5id, dataset, value)
+            call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       lbound(value), ubound(value))
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
+        else
+            if (present(default)) then
+                call h5_add_int(h5id, dataset, default)
+            else
+                call h5_add_int(h5id, dataset, 0)
+            end if
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       "value not allocated")
+        end if
     end subroutine h5_add_int_1_nobounds
 
     subroutine add_int_1(h5id, dataset, value)
@@ -280,16 +296,31 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         call add_int_2(h5id, dataset, value)
+        call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, lbounds, ubounds)
+        call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
     end subroutine h5_add_int_2_bounds
 
     subroutine h5_add_int_2_nobounds(h5id, dataset, value, comment, unit, default)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
-        integer, intent(in) :: value(:, :)
+        integer, allocatable, intent(in) :: value(:, :)
         character(len=*), intent(in), optional :: comment, unit
         integer, intent(in), optional :: default
 
-        call add_int_2(h5id, dataset, value)
+        if (allocated(value)) then
+            call add_int_2(h5id, dataset, value)
+            call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       lbound(value), ubound(value))
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
+        else
+            if (present(default)) then
+                call h5_add_int(h5id, dataset, default)
+            else
+                call h5_add_int(h5id, dataset, 0)
+            end if
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       "value not allocated")
+        end if
     end subroutine h5_add_int_2_nobounds
 
     subroutine add_int_2(h5id, dataset, value)
@@ -320,6 +351,8 @@ contains
         converted = int(value, int32)
         call writers(root_slot(slot))%add_i32_3(joined_path(slot, dataset), converted, status)
         call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
     end subroutine h5_add_int_3_bounds
 
     subroutine h5_add_double_0(h5id, dataset, value, comment, unit, accuracy)
@@ -334,6 +367,8 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%add_r64_scalar(joined_path(slot, dataset), value, status)
         call require_ok(status)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_0
 
     subroutine h5_add_double_1_bounds(h5id, dataset, value, lbounds, ubounds, &
@@ -347,17 +382,34 @@ contains
 
         call require_bounds(shape(value), lbounds, ubounds)
         call add_double_1(h5id, dataset, value)
+        call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, lbounds, ubounds)
+        call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
+        call add_accuracy_attribute(require_mode(h5id, MODE_WRITE), dataset, accuracy)
     end subroutine h5_add_double_1_bounds
 
     subroutine h5_add_double_1_nobounds(h5id, dataset, value, comment, unit, default, &
                                         accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
-        real(real64), intent(in) :: value(:)
+        real(real64), allocatable, intent(in) :: value(:)
         character(len=*), intent(in), optional :: comment, unit
         real(real64), intent(in), optional :: default, accuracy
 
-        call add_double_1(h5id, dataset, value)
+        if (allocated(value)) then
+            call add_double_1(h5id, dataset, value)
+            call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       lbound(value), ubound(value))
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
+            call add_accuracy_attribute(require_mode(h5id, MODE_WRITE), dataset, accuracy)
+        else
+            if (present(default)) then
+                call h5_add_double_0(h5id, dataset, default)
+            else
+                call h5_add_double_0(h5id, dataset, 0.0_real64)
+            end if
+            call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, &
+                                       "value not allocated")
+        end if
     end subroutine h5_add_double_1_nobounds
 
     subroutine add_double_1(h5id, dataset, value)
@@ -386,6 +438,9 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%add_r64_2(joined_path(slot, dataset), value, status)
         call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_2
 
     subroutine h5_add_double_3(h5id, dataset, value, lbounds, ubounds, comment, unit, accuracy)
@@ -402,6 +457,9 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%add_r64_3(joined_path(slot, dataset), value, status)
         call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_3
 
     subroutine h5_add_double_4(h5id, dataset, value, lbounds, ubounds, comment, unit, accuracy)
@@ -418,6 +476,9 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%add_r64_4(joined_path(slot, dataset), value, status)
         call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_4
 
     subroutine h5_add_double_5(h5id, dataset, value, lbounds, ubounds, comment, unit, accuracy)
@@ -434,6 +495,9 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%add_r64_5(joined_path(slot, dataset), value, status)
         call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+        call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_double_5
 
     integer function allocate_handle() result(slot)
@@ -555,6 +619,53 @@ contains
         if (size(ubounds) /= size(actual_shape)) error stop "HDF5 upper-bound rank mismatch"
         if (any(ubounds - lbounds + 1 /= actual_shape)) error stop "HDF5 bounds shape mismatch"
     end subroutine require_bounds
+
+    subroutine add_common_attributes(slot, dataset, comment, unit)
+        integer, intent(in) :: slot
+        character(len=*), intent(in) :: dataset
+        character(len=*), intent(in), optional :: comment, unit
+        type(fortio_status_t) :: status
+        character(len=:), allocatable :: path
+
+        path = joined_path(slot, dataset)
+        if (present(comment)) then
+            call writers(root_slot(slot))%add_text_attribute(path, "comment", comment, status)
+            call require_ok(status)
+        end if
+        if (present(unit)) then
+            call writers(root_slot(slot))%add_text_attribute(path, "unit", unit, status)
+            call require_ok(status)
+        end if
+    end subroutine add_common_attributes
+
+    subroutine add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        integer, intent(in) :: slot
+        character(len=*), intent(in) :: dataset
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        type(fortio_status_t) :: status
+        integer(int32), allocatable :: converted(:)
+        character(len=:), allocatable :: path
+
+        path = joined_path(slot, dataset)
+        converted = int(lbounds, int32)
+        call writers(root_slot(slot))%add_i32_attribute(path, "lbounds", converted, status)
+        call require_ok(status)
+        converted = int(ubounds, int32)
+        call writers(root_slot(slot))%add_i32_attribute(path, "ubounds", converted, status)
+        call require_ok(status)
+    end subroutine add_bounds_attributes
+
+    subroutine add_accuracy_attribute(slot, dataset, accuracy)
+        integer, intent(in) :: slot
+        character(len=*), intent(in) :: dataset
+        real(real64), intent(in), optional :: accuracy
+        type(fortio_status_t) :: status
+
+        if (.not. present(accuracy)) return
+        call writers(root_slot(slot))%add_r64_attribute(joined_path(slot, dataset), &
+                                                        "accuracy", accuracy, status)
+        call require_ok(status)
+    end subroutine add_accuracy_attribute
 
     subroutine require_ok(status)
         type(fortio_status_t), intent(in) :: status
