@@ -7,8 +7,13 @@ variables:
     double x_values(x) ;
         x_values:units = "m" ;
     double matrix(y, x) ;
+
+// global attributes:
+    :coordinate_system = "cartesian" ;
+    :rho_lcfs = 1.5 ;
 data:
     scalar = 42 ;
     x_values = 1.25, -2.5, 4.75 ;
     matrix = 1, 2, 3, 4, 5, 6 ;
+
 }

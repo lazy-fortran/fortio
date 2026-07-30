@@ -23,6 +23,13 @@ module fortio_netcdf_classic
         logical :: unlimited = .false.
     end type classic_dimension_t
 
+    type, public :: classic_attribute_t
+        character(len=:), allocatable :: name
+        integer :: type_code = 0
+        integer :: element_count = 0
+        integer(int8), allocatable :: bytes(:)
+    end type classic_attribute_t
+
     type, public :: classic_variable_t
         character(len=:), allocatable :: name
         integer, allocatable :: dimension_ids(:)
@@ -32,6 +39,7 @@ module fortio_netcdf_classic
         integer(int64) :: element_count = 0_int64
         logical :: record_variable = .false.
         integer :: attribute_count = 0
+        type(classic_attribute_t), allocatable :: attributes(:)
     end type classic_variable_t
 
     type, public :: classic_file_t
@@ -40,6 +48,7 @@ module fortio_netcdf_classic
         integer(int64) :: record_count = 0_int64
         integer(int64) :: record_size = 0_int64
         type(classic_dimension_t), allocatable :: dimensions(:)
+        type(classic_attribute_t), allocatable :: global_attributes(:)
         type(classic_variable_t), allocatable :: variables(:)
         logical :: opened = .false.
     contains
@@ -98,7 +107,7 @@ contains
         this%record_count = unsigned_i32(record_count_32)
         call read_dimensions(this, status)
         if (.not. status%ok()) return
-        call skip_attributes(this%reader, status)
+        call read_attributes(this%reader, this%global_attributes, status)
         if (.not. status%ok()) return
         call read_variables(this, status)
         if (.not. status%ok()) return
@@ -114,6 +123,7 @@ contains
         call this%reader%close(status)
         this%opened = .false.
         if (allocated(this%dimensions)) deallocate(this%dimensions)
+        if (allocated(this%global_attributes)) deallocate(this%global_attributes)
         if (allocated(this%variables)) deallocate(this%variables)
     end subroutine classic_close
 
@@ -396,8 +406,9 @@ contains
                 if (.not. status%ok()) return
                 this%variables(i)%dimension_ids(j) = id
             end do
-            call skip_attributes(this%reader, status, this%variables(i)%attribute_count)
+            call read_attributes(this%reader, this%variables(i)%attributes, status)
             if (.not. status%ok()) return
+            this%variables(i)%attribute_count = size(this%variables(i)%attributes)
             call this%reader%read_be_i32(type_code, status)
             if (.not. status%ok()) return
             this%variables(i)%type_code = type_code
@@ -436,40 +447,47 @@ contains
         end do
     end subroutine finalize_variable_layout
 
-    subroutine skip_attributes(reader, status, attribute_count)
+    subroutine read_attributes(reader, attributes, status)
         type(byte_reader_t), intent(inout) :: reader
+        type(classic_attribute_t), allocatable, intent(out) :: attributes(:)
         type(fortio_status_t), intent(inout) :: status
-        integer, intent(out), optional :: attribute_count
         integer(int32) :: tag, count, type_code, element_count
         integer(int64) :: bytes
         integer :: i
-        character(len=:), allocatable :: name
 
         call reader%read_be_i32(tag, status)
         if (.not. status%ok()) return
         call reader%read_be_i32(count, status)
         if (.not. status%ok()) return
-        if (present(attribute_count)) attribute_count = count
-        if (tag == 0 .and. count == 0) return
+        if (tag == 0 .and. count == 0) then
+            allocate(attributes(0))
+            return
+        end if
         if (tag /= NC_ATTRIBUTE .or. count < 0) then
             call status%set(FORTIO_EFORMAT, "invalid NetCDF attribute list")
             return
         end if
+        allocate(attributes(count))
         do i = 1, count
-            call read_name(reader, name, status)
+            call read_name(reader, attributes(i)%name, status)
             if (.not. status%ok()) return
             call reader%read_be_i32(type_code, status)
             if (.not. status%ok()) return
             call reader%read_be_i32(element_count, status)
             if (.not. status%ok()) return
+            attributes(i)%type_code = type_code
+            attributes(i)%element_count = element_count
             bytes = int(element_count, int64)*type_width(type_code)
             if (bytes < 0) then
                 call status%set(FORTIO_EFORMAT, "invalid NetCDF attribute")
                 return
             end if
-            call reader%seek(reader%position + padded_size(bytes))
+            allocate(attributes(i)%bytes(bytes))
+            call reader%read_bytes(attributes(i)%bytes, status)
+            if (.not. status%ok()) return
+            call reader%seek(reader%position + padded_size(bytes) - bytes)
         end do
-    end subroutine skip_attributes
+    end subroutine read_attributes
 
     subroutine read_name(reader, name, status)
         type(byte_reader_t), intent(inout) :: reader
