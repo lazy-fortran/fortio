@@ -3,8 +3,8 @@
 Small scientific file I/O for modern Fortran without NetCDF or HDF5 libraries.
 
 Fortio is an MIT-licensed implementation of the NetCDF and HDF5 file-format
-subset used by NEO-2, libneo, KAMEL, and SIMPLE. System NetCDF and HDF5
-installations are test oracles, not production dependencies.
+subset used by NEO-2, NEO-RT, libneo, KAMEL, SIMPLE, MEPHIT, and Rabe. System
+NetCDF and HDF5 installations are test oracles, not production dependencies.
 
 The only format-code dependency is zlib, used for the shuffle/deflate
 compression enabled by SIMPLE orbit output. Both fpm and the installed CMake
