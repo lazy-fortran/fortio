@@ -62,6 +62,7 @@ module fortio_hdf5_writer
         procedure :: add_text_attribute => hdf5_add_text_attribute
         procedure :: add_i32_attribute => hdf5_add_i32_attribute
         procedure :: add_r64_attribute => hdf5_add_r64_attribute
+        procedure :: remove_dataset => hdf5_remove_dataset
         procedure :: close => hdf5_writer_close
     end type hdf5_writer_t
 
@@ -305,6 +306,25 @@ contains
         attribute%values_r64 = [value]
         call append_attribute(this%datasets(dataset_id)%attributes, attribute, status)
     end subroutine hdf5_add_r64_attribute
+
+    subroutine hdf5_remove_dataset(this, name, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_dataset_t), allocatable :: temporary(:)
+        integer :: dataset_id, count
+
+        call find_dataset(this, name, dataset_id, status)
+        if (.not. status%ok()) then
+            call status%clear()
+            return
+        end if
+        count = size(this%datasets)
+        allocate(temporary(count - 1))
+        if (dataset_id > 1) temporary(:dataset_id - 1) = this%datasets(:dataset_id - 1)
+        if (dataset_id < count) temporary(dataset_id:) = this%datasets(dataset_id + 1:)
+        call move_alloc(temporary, this%datasets)
+    end subroutine hdf5_remove_dataset
 
     subroutine find_dataset(this, name, dataset_id, status)
         class(hdf5_writer_t), intent(in) :: this
