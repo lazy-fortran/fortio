@@ -50,6 +50,7 @@ module hdf5_tools
     public :: h5_create, h5_open_rw, h5_define_group, h5_open_group, h5_close_group
     public :: h5_add
     public :: h5_get_bounds
+    public :: h5_exists, h5_obj_exists
 
 contains
 
@@ -319,6 +320,25 @@ contains
             value(i:i) = temporary(i:i)
         end do
     end subroutine h5_get_string
+
+    logical function h5_exists(h5id, name_obj) result(exists)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: name_obj
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        slot = require_mode(h5id, MODE_READ)
+        call files(root_slot(slot))%exists(joined_path(slot, name_obj), exists, status)
+        call require_ok(status)
+    end function h5_exists
+
+    subroutine h5_obj_exists(h5id, name_obj, exists)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: name_obj
+        logical, intent(out) :: exists
+
+        exists = h5_exists(h5id, name_obj)
+    end subroutine h5_obj_exists
 
     subroutine h5_get_bounds_1(h5id, dataset, lb1, ub1)
         integer(HID_T), intent(in) :: h5id

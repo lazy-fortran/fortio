@@ -59,6 +59,7 @@ module fortio_hdf5_reader
         procedure :: read_r64_5 => hdf5_read_r64_5
         procedure :: read_i32_attribute => hdf5_read_i32_attribute
         procedure :: read_text_scalar => hdf5_read_text_scalar
+        procedure :: exists => hdf5_exists
     end type hdf5_file_t
 
 contains
@@ -266,6 +267,58 @@ contains
             value(i:i) = achar(byte_value(byte))
         end do
     end subroutine hdf5_read_text_scalar
+
+    subroutine hdf5_exists(this, path, exists, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        logical, intent(out) :: exists
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_link_t), allocatable :: links(:)
+        character(len=:), allocatable :: remaining, component
+        integer(int64) :: address
+        integer :: separator, i
+        logical :: matched
+
+        call status%clear()
+        exists = .false.
+        remaining = trim(adjustl(path))
+        do while (len(remaining) > 0)
+            if (remaining(1:1) /= "/") exit
+            remaining = remaining(2:)
+        end do
+        if (len(remaining) == 0) then
+            exists = .true.
+            return
+        end if
+        address = this%root_address
+        do
+            separator = index(remaining, "/")
+            if (separator == 0) then
+                component = remaining
+                remaining = ""
+            else
+                component = remaining(:separator - 1)
+                remaining = remaining(separator + 1:)
+            end if
+            if (len(component) == 0) then
+                if (len(remaining) == 0) exit
+                cycle
+            end if
+            call parse_links(this, address, links, status)
+            if (.not. status%ok()) return
+            matched = .false.
+            do i = 1, size(links)
+                if (links(i)%name == component) then
+                    address = links(i)%address
+                    matched = .true.
+                    exit
+                end if
+            end do
+            if (.not. matched) return
+            if (len(remaining) == 0) exit
+        end do
+        exists = .true.
+    end subroutine hdf5_exists
 
     subroutine hdf5_read_r64_scalar(this, path, value, status)
         class(hdf5_file_t), intent(inout) :: this

@@ -31,6 +31,7 @@ module fortio
         procedure :: read_r64_5 => file_read_r64_5
         procedure :: read_i32_attribute => file_read_i32_attribute
         procedure :: read_text_scalar => file_read_text_scalar
+        procedure :: exists => file_exists
         generic :: read => read_i32_scalar, read_i32_1, read_i32_2, read_i32_3, &
                            read_r64_scalar, read_r64_1, read_r64_2, read_r64_3, &
                            read_r64_4, read_r64_5
@@ -255,6 +256,19 @@ contains
         end if
         call this%hdf5%read_text_scalar(path, value, status)
     end subroutine file_read_text_scalar
+
+    subroutine file_exists(this, path, exists, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        logical, intent(out) :: exists
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "object existence requires HDF5")
+            return
+        end if
+        call this%hdf5%exists(path, exists, status)
+    end subroutine file_exists
 
     pure logical function is_hdf5_signature(bytes)
         integer(int8), intent(in) :: bytes(8)
