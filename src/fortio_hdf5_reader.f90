@@ -547,10 +547,10 @@ contains
         call this%reader%read_i8(version_byte, status)
         call this%reader%read_i8(class_byte, status)
         if (.not. status%ok()) return
-        if (byte_value(version_byte) /= 3 .or. &
+        if ((byte_value(version_byte) /= 3 .and. byte_value(version_byte) /= 4) .or. &
             byte_value(class_byte) /= H5_LAYOUT_CONTIGUOUS) then
             call status%set(FORTIO_ENOTSUP, &
-                            "only contiguous HDF5 layout version 3 is supported")
+                            "only contiguous HDF5 layout versions 3 and 4 are supported")
             return
         end if
         call this%reader%read_le_i64(dataset%data_address, status)
