@@ -604,6 +604,7 @@ contains
         integer, intent(in) :: header_flags
         type(fortio_status_t), intent(inout) :: status
         integer(int8) :: signature(4)
+        integer(int64) :: chunk_start
 
         call this%reader%seek(this%base_address + address + 1)
         call this%reader%read_bytes(signature, status)
@@ -612,7 +613,10 @@ contains
             call status%set(FORTIO_EFORMAT, "invalid HDF5 continuation chunk")
             return
         end if
-        call parse_message_chunk(this, this%reader%position, length - 8, links, &
+        ! Copy the position before passing it: passing the component directly
+        ! aliases the reader state that parse_message_chunk advances.
+        chunk_start = this%reader%position
+        call parse_message_chunk(this, chunk_start, length - 8, links, &
                                  dataset, want_links, header_flags, status)
     end subroutine parse_continuation
 

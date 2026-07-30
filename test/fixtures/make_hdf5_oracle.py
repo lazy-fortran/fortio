@@ -40,3 +40,6 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
         "rank5",
         data=np.arange(1, 9, dtype=np.float64).reshape(2, 1, 2, 1, 2),
     )
+    continued = handle.create_group("continued")
+    for index in range(5):
+        continued.create_dataset(f"value_{index}", data=np.int32(index + 10))

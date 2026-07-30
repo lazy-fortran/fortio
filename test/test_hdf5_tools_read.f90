@@ -7,7 +7,7 @@ program test_hdf5_tools_read
     integer(HID_T) :: file_id
     character(len=1024) :: fixture, generator, command
     character(len=32) :: label
-    integer :: scalar, command_status, lb1, lb2, ub1, ub2
+    integer :: scalar, continued_value, command_status, lb1, lb2, ub1, ub2
     integer :: int_matrix(3, 2), int_cube(3, 2, 2)
     real(real64) :: x(3), matrix(3, 2)
     real(real64) :: real_cube(3, 2, 2)
@@ -32,6 +32,10 @@ program test_hdf5_tools_read
     call h5_get(file_id, "real_ranks/rank4", rank4)
     call h5_get(file_id, "real_ranks/rank5", rank5)
     call h5_get(file_id, "real_ranks/real_cube", real_cube)
+    call h5_get(file_id, "continued/value_0", continued_value)
+    if (continued_value /= 10) error stop "first continued link differs from oracle"
+    call h5_get(file_id, "continued/value_4", continued_value)
+    if (continued_value /= 14) error stop "last continued link differs from oracle"
     call h5_get_bounds(file_id, "grid/matrix", lb1, lb2, ub1, ub2)
     if (any([lb1, lb2, ub1, ub2] /= [-2, 5, 0, 6])) &
         error stop "hdf5_tools bounds differ from h5py oracle"
