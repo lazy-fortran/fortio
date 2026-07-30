@@ -80,6 +80,8 @@ contains
 
         call status%clear()
         this%path = trim(path)
+        if (allocated(this%datasets)) deallocate(this%datasets)
+        if (allocated(this%groups)) deallocate(this%groups)
         allocate(this%datasets(0), this%groups(1))
         this%groups(1)%path = ""
         this%groups(1)%name = ""

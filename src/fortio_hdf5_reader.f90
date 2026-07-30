@@ -576,7 +576,7 @@ contains
         type(hdf5_dataset_t), intent(out) :: dataset
         type(fortio_status_t), intent(inout) :: status
         character(len=:), allocatable :: remaining, component
-        integer(int64) :: address
+        integer(int64) :: address, child_address
         integer :: separator
 
         call status%clear()
@@ -600,8 +600,9 @@ contains
                 remaining = remaining(separator + 1:)
             end if
             if (len(component) == 0) cycle
-            call find_child(this, address, component, address, status)
+            call find_child(this, address, component, child_address, status)
             if (.not. status%ok()) return
+            address = child_address
             if (len(remaining) == 0) exit
         end do
         call parse_dataset_header(this, address, dataset, status)
