@@ -69,7 +69,7 @@ program test_hdf5_tools_write
     call h5_create_parent_groups(file_id, "prepared/nested/")
     call h5_add(file_id, "prepared/nested/value", 9)
     call h5_add(file_id, "absent", absent, default=7)
-    call h5_define_group(file_id, "results", group_id)
+    call h5_define_group(file_id, "results/", group_id)
     call h5_add(group_id, "matrix", matrix, [1, 1], [2, 3])
     call h5_add(group_id, "cube", cube, [1, 1, 1, 1, 1], [2, 2, 2, 2, 2])
     call h5_add(group_id, "complex_vector", complex_vector, [1], [2])
