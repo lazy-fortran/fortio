@@ -48,5 +48,5 @@ with h5py.File(sys.argv[1], "w", libver="latest") as handle:
     for index in range(5):
         continued.create_dataset(f"value_{index}", data=np.int32(index + 10))
     dense = handle.create_group("dense")
-    for index in range(12):
+    for index in range(64):
         dense.create_dataset(f"value_{index:02d}", data=np.int32(index + 20))

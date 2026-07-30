@@ -41,8 +41,8 @@ program test_hdf5_tools_read
     if (continued_value /= 14) error stop "last continued link differs from oracle"
     call h5_get(file_id, "dense/value_00", continued_value)
     if (continued_value /= 20) error stop "first dense link differs from oracle"
-    call h5_get(file_id, "dense/value_11", continued_value)
-    if (continued_value /= 31) error stop "last dense link differs from oracle"
+    call h5_get(file_id, "dense/value_63", continued_value)
+    if (continued_value /= 83) error stop "last dense link differs from oracle"
     call h5_get_bounds(file_id, "grid/matrix", lb1, lb2, ub1, ub2)
     if (any([lb1, lb2, ub1, ub2] /= [-2, 5, 0, 6])) &
         error stop "hdf5_tools bounds differ from h5py oracle"
@@ -51,7 +51,7 @@ program test_hdf5_tools_read
     if (.not. h5_exists(file_id, "grid/matrix")) error stop "existing dataset not found"
     if (.not. h5_exists(file_id, "dense")) error stop "existing dense group not found"
     if (h5_exists(file_id, "grid/missing")) error stop "missing dataset reported present"
-    call h5_obj_exists(file_id, "dense/value_11", object_exists)
+    call h5_obj_exists(file_id, "dense/value_63", object_exists)
     if (.not. object_exists) error stop "h5_obj_exists missed dense dataset"
     call h5_close(file_id)
     call h5_deinit()
