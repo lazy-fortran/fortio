@@ -59,10 +59,17 @@ module netcdf
         module procedure get_att_r64_scalar, get_att_r64_rank1
     end interface nf90_get_att
 
+    interface nf90_put_att
+        module procedure put_att_text
+        module procedure put_att_i32_scalar, put_att_i32_rank1
+        module procedure put_att_r64_scalar, put_att_r64_rank1
+    end interface nf90_put_att
+
     public :: nf90_open, nf90_create, nf90_close, nf90_def_dim, nf90_def_var
     public :: nf90_enddef, nf90_inq_varid, nf90_get_var, nf90_put_var, nf90_strerror
     public :: nf90_inq_dimid, nf90_inquire_dimension, nf90_inquire_variable
     public :: nf90_inquire_attribute, nf90_get_att
+    public :: nf90_put_att
 
 contains
 
@@ -420,6 +427,63 @@ contains
             code = NF90_EINVAL
         end select
     end function get_att_r64_rank1
+
+    integer function put_att_text(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name, value
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_attribute_text(varid, name, value, status)
+        code = finish_status(status)
+    end function put_att_text
+
+    integer function put_att_i32_scalar(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: value
+
+        code = put_att_i32_rank1(ncid, varid, name, [value])
+    end function put_att_i32_scalar
+
+    integer function put_att_i32_rank1(ncid, varid, name, values) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: values(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_attribute_i32(varid, name, values, status)
+        code = finish_status(status)
+    end function put_att_i32_rank1
+
+    integer function put_att_r64_scalar(ncid, varid, name, value) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        real(real64), intent(in) :: value
+
+        code = put_att_r64_rank1(ncid, varid, name, [value])
+    end function put_att_r64_scalar
+
+    integer function put_att_r64_rank1(ncid, varid, name, values) result(code)
+        integer, intent(in) :: ncid, varid
+        character(len=*), intent(in) :: name
+        real(real64), intent(in) :: values(:)
+        type(fortio_status_t) :: status
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        call writers(ncid)%put_attribute_r64(varid, name, values, status)
+        code = finish_status(status)
+    end function put_att_r64_rank1
 
     integer function get_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid

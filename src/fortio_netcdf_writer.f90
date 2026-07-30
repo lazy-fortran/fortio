@@ -9,6 +9,15 @@ module fortio_netcdf_writer
 
     integer(int32), parameter :: NC_DIMENSION = 10
     integer(int32), parameter :: NC_VARIABLE = 11
+    integer(int32), parameter :: NC_ATTRIBUTE = 12
+
+    type :: writer_attribute_t
+        character(len=:), allocatable :: name
+        integer :: type_code = 0
+        character(len=:), allocatable :: value_text
+        integer(int32), allocatable :: values_i32(:)
+        real(real64), allocatable :: values_r64(:)
+    end type writer_attribute_t
 
     type, public :: writer_dimension_t
         character(len=:), allocatable :: name
@@ -22,6 +31,7 @@ module fortio_netcdf_writer
         integer :: type_code = 0
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
+        type(writer_attribute_t), allocatable :: attributes(:)
         integer(int64) :: begin_offset = 0_int64
         integer(int64) :: value_size = 0_int64
     end type writer_variable_t
@@ -30,6 +40,7 @@ module fortio_netcdf_writer
         character(len=:), allocatable :: path
         type(writer_dimension_t), allocatable :: dimensions(:)
         type(writer_variable_t), allocatable :: variables(:)
+        type(writer_attribute_t), allocatable :: global_attributes(:)
         logical :: defining = .true.
         logical :: opened = .false.
     contains
@@ -37,6 +48,9 @@ module fortio_netcdf_writer
         procedure :: define_dimension => classic_writer_define_dimension
         procedure :: define_variable => classic_writer_define_variable
         procedure :: end_definition => classic_writer_end_definition
+        procedure :: put_attribute_text => classic_writer_put_attribute_text
+        procedure :: put_attribute_i32 => classic_writer_put_attribute_i32
+        procedure :: put_attribute_r64 => classic_writer_put_attribute_r64
         procedure :: put_i32_scalar => classic_writer_put_i32_scalar
         procedure :: put_i32_1 => classic_writer_put_i32_1
         procedure :: put_r64_scalar => classic_writer_put_r64_scalar
@@ -55,7 +69,7 @@ contains
 
         call status%clear()
         this%path = path
-        allocate(this%dimensions(0), this%variables(0))
+        allocate(this%dimensions(0), this%variables(0), this%global_attributes(0))
         this%defining = .true.
         this%opened = .true.
     end subroutine classic_writer_create
@@ -116,6 +130,7 @@ contains
         if (count > 0) temporary(:count) = this%variables
         temporary(count + 1)%name = trim(name)
         temporary(count + 1)%type_code = type_code
+        allocate(temporary(count + 1)%attributes(0))
         ! The compatibility API accepts Fortran dimension order. Classic
         ! headers store C dimension order.
         temporary(count + 1)%dimension_ids = dimension_ids(size(dimension_ids):1:-1)
@@ -150,6 +165,62 @@ contains
         end if
         this%defining = .false.
     end subroutine classic_writer_end_definition
+
+    subroutine classic_writer_put_attribute_text(this, id, name, value, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        character(len=*), intent(in) :: name, value
+        type(fortio_status_t), intent(inout) :: status
+        type(writer_attribute_t) :: attribute
+
+        if (.not. prepare_attribute(this, id, status)) return
+        attribute%name = trim(name)
+        attribute%type_code = 2
+        attribute%value_text = value
+        if (id == -1) then
+            call store_attribute(this%global_attributes, attribute)
+        else
+            call store_attribute(this%variables(id + 1)%attributes, attribute)
+        end if
+    end subroutine classic_writer_put_attribute_text
+
+    subroutine classic_writer_put_attribute_i32(this, id, name, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        character(len=*), intent(in) :: name
+        integer(int32), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(writer_attribute_t) :: attribute
+
+        if (.not. prepare_attribute(this, id, status)) return
+        attribute%name = trim(name)
+        attribute%type_code = NC_INT
+        attribute%values_i32 = values
+        if (id == -1) then
+            call store_attribute(this%global_attributes, attribute)
+        else
+            call store_attribute(this%variables(id + 1)%attributes, attribute)
+        end if
+    end subroutine classic_writer_put_attribute_i32
+
+    subroutine classic_writer_put_attribute_r64(this, id, name, values, status)
+        class(classic_writer_t), intent(inout) :: this
+        integer, intent(in) :: id
+        character(len=*), intent(in) :: name
+        real(real64), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(writer_attribute_t) :: attribute
+
+        if (.not. prepare_attribute(this, id, status)) return
+        attribute%name = trim(name)
+        attribute%type_code = NC_DOUBLE
+        attribute%values_r64 = values
+        if (id == -1) then
+            call store_attribute(this%global_attributes, attribute)
+        else
+            call store_attribute(this%variables(id + 1)%attributes, attribute)
+        end if
+    end subroutine classic_writer_put_attribute_r64
 
     subroutine classic_writer_put_i32_scalar(this, id, value, status)
         class(classic_writer_t), intent(inout) :: this
@@ -270,6 +341,45 @@ contains
         if (.not. prepare_put) call status%set(FORTIO_ESHAPE, "variable shape mismatch")
     end function prepare_put
 
+    logical function prepare_attribute(this, id, status)
+        class(classic_writer_t), intent(in) :: this
+        integer, intent(in) :: id
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        prepare_attribute = this%opened
+        if (prepare_attribute) prepare_attribute = this%defining
+        if (.not. prepare_attribute) then
+            call status%set(FORTIO_ESTATE, "attribute write requires define mode")
+            return
+        end if
+        prepare_attribute = id == -1
+        if (.not. prepare_attribute) then
+            prepare_attribute = id >= 0
+            if (prepare_attribute) prepare_attribute = id < size(this%variables)
+        end if
+        if (.not. prepare_attribute) call status%set(FORTIO_ENOTFOUND, "invalid variable ID")
+    end function prepare_attribute
+
+    subroutine store_attribute(attributes, attribute)
+        type(writer_attribute_t), allocatable, intent(inout) :: attributes(:)
+        type(writer_attribute_t), intent(in) :: attribute
+        type(writer_attribute_t), allocatable :: temporary(:)
+        integer :: i, count
+
+        do i = 1, size(attributes)
+            if (attributes(i)%name == attribute%name) then
+                attributes(i) = attribute
+                return
+            end if
+        end do
+        count = size(attributes)
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = attributes
+        temporary(count + 1) = attribute
+        call move_alloc(temporary, attributes)
+    end subroutine store_attribute
+
     subroutine assign_offsets(this)
         class(classic_writer_t), intent(inout) :: this
         integer(int64) :: offset
@@ -295,14 +405,15 @@ contains
                 header_size = header_size + name_size(this%dimensions(i)%name) + 4
             end do
         end if
-        header_size = header_size + 8 ! global attributes absent
+        header_size = header_size + attributes_size(this%global_attributes)
         if (size(this%variables) == 0) then
             header_size = header_size + 8
         else
             header_size = header_size + 8
             do i = 1, size(this%variables)
                 header_size = header_size + name_size(this%variables(i)%name) + 4 + &
-                              4*size(this%variables(i)%dimension_ids) + 8 + 4 + 4 + 4
+                              4*size(this%variables(i)%dimension_ids) + &
+                              attributes_size(this%variables(i)%attributes) + 4 + 4 + 4
             end do
         end if
     end function header_size
@@ -334,7 +445,7 @@ contains
                 end if
             end do
         end if
-        call write_absent(writer, status)
+        call write_attributes(writer, this%global_attributes, status)
         if (size(this%variables) == 0) then
             call write_absent(writer, status)
             return
@@ -347,12 +458,75 @@ contains
             do j = 1, size(this%variables(i)%dimension_ids)
                 call writer%write_be_i32(int(this%variables(i)%dimension_ids(j), int32), status)
             end do
-            call write_absent(writer, status)
+            call write_attributes(writer, this%variables(i)%attributes, status)
             call writer%write_be_i32(int(this%variables(i)%type_code, int32), status)
             call writer%write_be_i32(int(this%variables(i)%value_size, int32), status)
             call writer%write_be_i32(int(this%variables(i)%begin_offset, int32), status)
         end do
     end subroutine write_header
+
+    integer(int64) function attributes_size(attributes) result(total)
+        type(writer_attribute_t), intent(in) :: attributes(:)
+        integer(int64) :: bytes
+        integer :: i
+
+        total = 8_int64
+        do i = 1, size(attributes)
+            select case (attributes(i)%type_code)
+            case (2)
+                bytes = len(attributes(i)%value_text)
+            case (NC_INT)
+                bytes = 4_int64*size(attributes(i)%values_i32, kind=int64)
+            case (NC_DOUBLE)
+                bytes = 8_int64*size(attributes(i)%values_r64, kind=int64)
+            case default
+                bytes = 0
+            end select
+            total = total + name_size(attributes(i)%name) + 8 + padded_size(bytes)
+        end do
+    end function attributes_size
+
+    subroutine write_attributes(writer, attributes, status)
+        type(byte_writer_t), intent(inout) :: writer
+        type(writer_attribute_t), intent(in) :: attributes(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: text_bytes(:)
+        integer(int64) :: bytes
+        integer :: i, j
+
+        if (size(attributes) == 0) then
+            call write_absent(writer, status)
+            return
+        end if
+        call writer%write_be_i32(NC_ATTRIBUTE, status)
+        call writer%write_be_i32(int(size(attributes), int32), status)
+        do i = 1, size(attributes)
+            call write_name(writer, attributes(i)%name, status)
+            call writer%write_be_i32(int(attributes(i)%type_code, int32), status)
+            select case (attributes(i)%type_code)
+            case (2)
+                call writer%write_be_i32(int(len(attributes(i)%value_text), int32), status)
+                allocate(text_bytes(len(attributes(i)%value_text)))
+                do j = 1, size(text_bytes)
+                    text_bytes(j) = int(iachar(attributes(i)%value_text(j:j)), int8)
+                end do
+                call writer%write_bytes(text_bytes, status)
+                bytes = size(text_bytes, kind=int64)
+                deallocate(text_bytes)
+            case (NC_INT)
+                call writer%write_be_i32(int(size(attributes(i)%values_i32), int32), status)
+                call write_i32_values(writer, attributes(i)%values_i32, status)
+                bytes = 4_int64*size(attributes(i)%values_i32, kind=int64)
+            case (NC_DOUBLE)
+                call writer%write_be_i32(int(size(attributes(i)%values_r64), int32), status)
+                call write_r64_values(writer, attributes(i)%values_r64, status)
+                bytes = 8_int64*size(attributes(i)%values_r64, kind=int64)
+            end select
+            if (.not. status%ok()) return
+            call write_padding(writer, padded_size(bytes) - bytes, status)
+            if (.not. status%ok()) return
+        end do
+    end subroutine write_attributes
 
     subroutine write_absent(writer, status)
         type(byte_writer_t), intent(inout) :: writer
