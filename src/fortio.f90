@@ -27,6 +27,7 @@ module fortio
         procedure :: read_r64_scalar => file_read_r64_scalar
         procedure :: read_r64_1 => file_read_r64_1
         procedure :: read_r64_2 => file_read_r64_2
+        procedure :: read_into_r64_2 => file_read_into_r64_2
         procedure :: read_r64_3 => file_read_r64_3
         procedure :: read_r64_4 => file_read_r64_4
         procedure :: read_r64_5 => file_read_r64_5
@@ -290,6 +291,19 @@ contains
             call status%set(FORTIO_ESTATE, "no supported file is open")
         end select
     end subroutine file_read_r64_2
+
+    subroutine file_read_into_r64_2(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), contiguous, target, intent(out) :: value(:, :)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "read-into rank 2 requires HDF5")
+            return
+        end if
+        call this%hdf5%read_into_r64_2(path, value, status)
+    end subroutine file_read_into_r64_2
 
     subroutine file_read_r64_3(this, path, value, status)
         class(fortio_file_t), intent(inout) :: this

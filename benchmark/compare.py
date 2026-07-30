@@ -12,22 +12,12 @@ from pathlib import Path
 RESULT = re.compile(r"seconds=\s*([0-9.Ee+-]+)\s+checksum=\s*([0-9.Ee+-]+)")
 
 
-def measure(executable: Path, directory: Path, samples: int) -> tuple[float, float]:
-    timings = []
-    checksum = None
-    for sample in range(samples):
-        output = subprocess.check_output(
-            [executable, directory / f"{executable.name}-{sample}.nc"], text=True
-        )
-        match = RESULT.search(output)
-        if match is None:
-            raise RuntimeError(f"unrecognized benchmark output: {output}")
-        timings.append(float(match.group(1)))
-        current_checksum = float(match.group(2))
-        if checksum is not None and current_checksum != checksum:
-            raise RuntimeError("benchmark checksums are inconsistent")
-        checksum = current_checksum
-    return statistics.median(timings), checksum
+def measure_once(executable: Path, path: Path) -> tuple[float, float]:
+    output = subprocess.check_output([executable, path], text=True)
+    match = RESULT.search(output)
+    if match is None:
+        raise RuntimeError(f"unrecognized benchmark output: {output}")
+    return float(match.group(1)), float(match.group(2))
 
 
 def main() -> int:
@@ -44,14 +34,23 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="fortio-benchmark-") as temporary:
         directory = Path(temporary)
-        fortio_seconds, fortio_checksum = measure(
-            args.fortio.resolve(), directory, args.samples
-        )
-        native_seconds, native_checksum = measure(
-            args.native.resolve(), directory, args.samples
-        )
-    if fortio_checksum != native_checksum:
-        raise RuntimeError("fortio and native NetCDF checksums differ")
+        executables = [args.fortio.resolve(), args.native.resolve()]
+        timings = [[], []]
+        checksums = [None, None]
+        for sample in range(args.samples):
+            order = [0, 1] if sample % 2 == 0 else [1, 0]
+            for index in order:
+                elapsed, checksum = measure_once(
+                    executables[index],
+                    directory / f"{executables[index].name}-{sample}.dat",
+                )
+                timings[index].append(elapsed)
+                if checksums[index] is not None and checksum != checksums[index]:
+                    raise RuntimeError("benchmark checksums are inconsistent")
+                checksums[index] = checksum
+        fortio_seconds, native_seconds = map(statistics.median, timings)
+    if checksums[0] != checksums[1]:
+        raise RuntimeError("fortio and native-library checksums differ")
 
     ratio = fortio_seconds / native_seconds
     print(f"fortio median: {fortio_seconds:.6f} s")

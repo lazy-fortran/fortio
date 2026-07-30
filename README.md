@@ -63,6 +63,9 @@ cmake --build build-benchmark -j
 python benchmark/compare.py \
   build-benchmark/benchmark_fortio_netcdf \
   build-benchmark/benchmark_native_netcdf --enforce
+python benchmark/compare.py \
+  build-benchmark/benchmark_fortio_hdf5 \
+  build-benchmark/benchmark_native_hdf5 --enforce
 ```
 
 The comparison uses medians and verifies identical result checksums.

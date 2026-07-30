@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(fortio VERSION 0.1.0 LANGUAGES Fortran)
+project(fortio VERSION 0.1.0 LANGUAGES C Fortran)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF" OFF)
+option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OFF)
 
 add_library(fortio
+    src/fortio_posix_io.c
+    src/fortio_posix.f90
     src/fortio_status.f90
     src/fortio_checksum.f90
     src/fortio_bytes.f90
@@ -29,7 +31,7 @@ target_include_directories(fortio PUBLIC
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     # fortio uses standard allocatable assignment internally. Some consumers,
     # including libneo, disable that language behavior project-wide.
-    target_compile_options(fortio PRIVATE -frealloc-lhs)
+    target_compile_options(fortio PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:-frealloc-lhs>)
 endif()
 
 if(FORTIO_BUILD_BENCHMARKS)
@@ -48,6 +50,14 @@ if(FORTIO_BUILD_BENCHMARKS)
     add_executable(benchmark_native_netcdf benchmark/netcdf_roundtrip.f90)
     target_include_directories(benchmark_native_netcdf PRIVATE "${NETCDFF_INCLUDE_DIR}")
     target_link_libraries(benchmark_native_netcdf PRIVATE ${NETCDFF_LINK_FLAGS})
+
+    find_package(HDF5 COMPONENTS Fortran REQUIRED)
+    add_executable(benchmark_fortio_hdf5 benchmark/hdf5_roundtrip_fortio.f90)
+    target_link_libraries(benchmark_fortio_hdf5 PRIVATE fortio)
+
+    add_executable(benchmark_native_hdf5 benchmark/hdf5_roundtrip_native.f90)
+    target_include_directories(benchmark_native_hdf5 PRIVATE ${HDF5_Fortran_INCLUDE_DIRS})
+    target_link_libraries(benchmark_native_hdf5 PRIVATE ${HDF5_Fortran_LIBRARIES})
 endif()
 
 include(CTest)
