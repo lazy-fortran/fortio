@@ -1215,7 +1215,7 @@ contains
                 file%dimensions(dimension_id + 1)%length = dimensions(1)
                 if (netcdf4_is_coordinate_variable(attributes, names(i))) then
                     call append_netcdf4_variable(file, names(i), type_class, element_size, &
-                        attributes, status)
+                        attributes, status, dimension_id)
                     if (.not. status%ok()) return
                 end if
             else
@@ -1256,12 +1256,13 @@ contains
     end function netcdf4_is_coordinate_variable
 
     subroutine append_netcdf4_variable(file, name, type_class, element_size, attributes, &
-            status)
+            status, coordinate_dimension_id)
         type(netcdf4_file_t), intent(inout) :: file
         character(len=*), intent(in) :: name
         integer, intent(in) :: type_class, element_size
         type(hdf5_attribute_t), intent(in) :: attributes(:)
         type(fortio_status_t), intent(inout) :: status
+        integer, intent(in), optional :: coordinate_dimension_id
         type(classic_variable_t), allocatable :: temporary(:)
         integer :: count, i
 
@@ -1274,13 +1275,17 @@ contains
             call status%set(NF90_ENOTSUPPORT, "NetCDF-4 variable datatype is not required")
             return
         end if
-        allocate(temporary(count + 1)%dimension_ids(0))
-        do i = 1, size(attributes)
-            if (attributes(i)%name /= "_Netcdf4Coordinates") cycle
-            if (.not. allocated(attributes(i)%values_i32)) cycle
-            temporary(count + 1)%dimension_ids = int(attributes(i)%values_i32)
-            exit
-        end do
+        if (present(coordinate_dimension_id)) then
+            temporary(count + 1)%dimension_ids = [coordinate_dimension_id]
+        else
+            allocate(temporary(count + 1)%dimension_ids(0))
+            do i = 1, size(attributes)
+                if (attributes(i)%name /= "_Netcdf4Coordinates") cycle
+                if (.not. allocated(attributes(i)%values_i32)) cycle
+                temporary(count + 1)%dimension_ids = int(attributes(i)%values_i32)
+                exit
+            end do
+        end if
         call convert_netcdf4_attributes(attributes, temporary(count + 1)%attributes)
         temporary(count + 1)%attribute_count = size(temporary(count + 1)%attributes)
         call move_alloc(temporary, file%variables)

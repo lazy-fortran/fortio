@@ -3,7 +3,7 @@ program test_netcdf4_deflate
     use netcdf, only: NF90_CLOBBER, NF90_DOUBLE, NF90_INT, NF90_NETCDF4, NF90_NOWRITE, &
         NF90_NOERR, nf90_close, nf90_create, nf90_def_dim, nf90_def_var, &
         nf90_def_var_deflate, nf90_enddef, nf90_get_var, nf90_inq_varid, nf90_open, &
-        nf90_put_var
+        nf90_inquire_variable, nf90_put_var
     implicit none
 
     real(real64) :: values(64, 32)
@@ -11,7 +11,8 @@ program test_netcdf4_deflate
     integer(int32) :: particle(64), timestep(32)
     character(len=512) :: path, verifier
     integer :: command_status, dim_particle, dim_timestep, i, j, ncid
-    integer :: status, var_field, var_particle, var_timestep
+    integer :: dimids(2), ndims, status, xtype
+    integer :: var_field, var_particle, var_timestep
 
     call get_command_argument(1, path)
     call get_command_argument(2, verifier)
@@ -57,8 +58,24 @@ program test_netcdf4_deflate
 
     status = nf90_open(trim(path), NF90_NOWRITE, ncid)
     if (status /= NF90_NOERR) error stop "reopen compressed NetCDF-4"
+    status = nf90_inq_varid(ncid, "particle", var_particle)
+    if (status /= NF90_NOERR) error stop "find coordinate"
+    status = nf90_inquire_variable(ncid, var_particle, xtype=xtype, ndims=ndims, &
+        dimids=dimids)
+    if (status /= NF90_NOERR) error stop "inquire coordinate"
+    if (xtype /= NF90_INT .or. ndims /= 1 .or. dimids(1) /= dim_particle) then
+        print *, "coordinate metadata:", xtype, ndims, dimids(1), dim_particle
+        error stop "coordinate metadata differs"
+    end if
     status = nf90_inq_varid(ncid, "field", var_field)
     if (status /= NF90_NOERR) error stop "find compressed field"
+    status = nf90_inquire_variable(ncid, var_field, xtype=xtype, ndims=ndims, &
+        dimids=dimids)
+    if (status /= NF90_NOERR) error stop "inquire compressed field"
+    if (xtype /= NF90_DOUBLE .or. ndims /= 2) then
+        print *, "field metadata:", xtype, ndims, dimids
+        error stop "field metadata differs"
+    end if
     status = nf90_get_var(ncid, var_field, readback)
     if (status /= NF90_NOERR) error stop "read compressed field"
     if (any(readback /= values)) error stop "compressed field roundtrip differs"
