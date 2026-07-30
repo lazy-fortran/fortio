@@ -50,7 +50,7 @@ module netcdf
     end interface nf90_get_var
 
     interface nf90_def_var
-        module procedure def_var_scalar, def_var_array
+        module procedure def_var_scalar, def_var_one_dimension, def_var_array
     end interface nf90_def_var
 
     interface nf90_put_var
@@ -187,6 +187,15 @@ contains
 
         code = def_var_array(ncid, name, type_code, [integer ::], varid)
     end function def_var_scalar
+
+    integer function def_var_one_dimension(ncid, name, type_code, dimension_id, &
+                                           varid) result(code)
+        integer, intent(in) :: ncid, type_code, dimension_id
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: varid
+
+        code = def_var_array(ncid, name, type_code, [dimension_id], varid)
+    end function def_var_one_dimension
 
     integer function def_var_array(ncid, name, type_code, dimension_ids, varid) result(code)
         integer, intent(in) :: ncid, type_code
