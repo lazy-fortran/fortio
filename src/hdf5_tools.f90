@@ -17,6 +17,7 @@ module hdf5_tools
     integer, parameter :: MODE_READ = 1, MODE_WRITE = 2, MODE_UNLIMITED = 3
     integer, parameter :: UNLIMITED_INTEGER = 1, UNLIMITED_DOUBLE = 2
     type :: unlimited_buffer_t
+        character(len=1024) :: file_path = ""
         character(len=1024) :: path = ""
         integer :: type_code = 0
         integer :: used = 0
@@ -102,8 +103,9 @@ contains
             call close_root(slot)
             if (handle_mode(slot) == MODE_WRITE) &
                 call write_session_unlock(write_lock_token(slot))
+            call invalidate_root(slot)
         end do
-        call clear_all_handles()
+        call clear_nonpersistent_handles()
     end subroutine h5_deinit
 
     subroutine h5_open(filename, h5id)
@@ -428,6 +430,7 @@ contains
         root_handle(slot) = .false.
         write_lock_token(slot) = -1_c_int
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
+        unlimited_buffers(slot)%file_path = writers(root)%path
         unlimited_buffers(slot)%type_code = int(type_id)
         select case (unlimited_buffers(slot)%type_code)
         case (UNLIMITED_INTEGER)
@@ -461,6 +464,7 @@ contains
         root_slot(slot) = root
         root_handle(slot) = .false.
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
+        unlimited_buffers(slot)%file_path = writers(root)%path
         unlimited_buffers(slot)%type_code = UNLIMITED_DOUBLE
         if (unlimited_dimension == 1) then
             if (dimensions(2) < 1) &
@@ -1371,8 +1375,33 @@ contains
         integer, intent(in) :: mode
 
         slot = require_id(h5id)
+        if (mode == MODE_UNLIMITED) call attach_unlimited_buffer(slot)
         if (handle_mode(slot) /= mode) error stop "fortio HDF5 identifier has wrong mode"
     end function require_mode
+
+    subroutine attach_unlimited_buffer(slot)
+        integer, intent(in) :: slot
+        integer :: candidate, root
+
+        root = root_slot(slot)
+        if (root > 0) then
+            if (in_use(root)) return
+        end if
+
+        root = 0
+        call handle_table_lock()
+        do candidate = 1, MAX_OPEN_FILES
+            if (.not. in_use(candidate)) cycle
+            if (.not. root_handle(candidate)) cycle
+            if (handle_mode(candidate) /= MODE_WRITE) cycle
+            if (writers(candidate)%path /= trim(unlimited_buffers(slot)%file_path)) cycle
+            root = candidate
+            root_slot(slot) = candidate
+            exit
+        end do
+        call handle_table_unlock()
+        if (root == 0) error stop "unlimited HDF5 dataset file is not open"
+    end subroutine attach_unlimited_buffer
 
     subroutine set_root_handle(slot, mode)
         integer, intent(in) :: slot, mode
@@ -1431,6 +1460,8 @@ contains
         do slot = 1, MAX_OPEN_FILES
             if (.not. in_use(slot)) cycle
             if (root_slot(slot) /= root .or. handle_mode(slot) /= MODE_UNLIMITED) cycle
+            if (writers(root)%object_exists(trim(unlimited_buffers(slot)%path))) &
+                call writers(root)%remove_dataset(trim(unlimited_buffers(slot)%path), status)
             select case (unlimited_buffers(slot)%type_code)
             case (UNLIMITED_INTEGER)
                 call writers(root)%add_i32_1(trim(unlimited_buffers(slot)%path), &
@@ -1457,7 +1488,12 @@ contains
         call handle_table_lock()
         do slot = 1, MAX_OPEN_FILES
             if (in_use(slot)) then
-                if (root_slot(slot) == root) call clear_handle(slot)
+                if (root_slot(slot) /= root) cycle
+                if (handle_mode(slot) == MODE_UNLIMITED) then
+                    root_slot(slot) = 0
+                else
+                    call clear_handle(slot)
+                end if
             end if
         end do
         call handle_table_unlock()
@@ -1471,6 +1507,14 @@ contains
         end do
     end subroutine clear_all_handles
 
+    subroutine clear_nonpersistent_handles()
+        integer :: slot
+
+        do slot = 1, MAX_OPEN_FILES
+            if (handle_mode(slot) /= MODE_UNLIMITED) call clear_handle(slot)
+        end do
+    end subroutine clear_nonpersistent_handles
+
     subroutine clear_handle(slot)
         integer, intent(in) :: slot
 
@@ -1481,6 +1525,7 @@ contains
         root_handle(slot) = .false.
         write_lock_token(slot) = -1_c_int
         handle_prefix(slot) = ""
+        unlimited_buffers(slot)%file_path = ""
         unlimited_buffers(slot)%path = ""
         unlimited_buffers(slot)%type_code = 0
         unlimited_buffers(slot)%used = 0

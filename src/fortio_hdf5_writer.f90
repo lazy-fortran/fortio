@@ -504,7 +504,7 @@ contains
         end if
         do i = 1, size(attributes)
             if (attributes(i)%name == attribute%name) then
-                call status%set(FORTIO_ESTATE, "duplicate HDF5 attribute name")
+                attributes(i) = attribute
                 return
             end if
         end do
@@ -559,7 +559,6 @@ contains
         do i = 1, size(this%datasets)
             if (this%datasets(i)%parent_group == parent_group .and. &
                 this%datasets(i)%name == leaf_name) then
-                call status%set(FORTIO_ESTATE, "duplicate HDF5 dataset name")
                 prepare_dataset = .false.
                 return
             end if
