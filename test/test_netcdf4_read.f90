@@ -6,7 +6,7 @@ program test_netcdf4_read
 
     character(len=1024) :: fixture, cdl, command
     integer(int32) :: count, indices(2)
-    real(real64) :: radius_values(3), coefficients(3, 2)
+    real(real64) :: radius(3), radius_values(3), coefficients(3, 2)
     integer :: ncid, dimid, varid, length, command_status
 
     call get_command_argument(1, fixture)
@@ -35,6 +35,12 @@ program test_netcdf4_read
     if (nf90_get_var(ncid, varid, indices) /= NF90_NOERR) &
         error stop "NetCDF-4 integer vector read failed"
     if (any(indices /= [4_int32, 9_int32])) error stop "NetCDF-4 integer vector differs"
+    if (nf90_inq_varid(ncid, "radius", varid) /= NF90_NOERR) &
+        error stop "NetCDF-4 coordinate variable lookup failed"
+    if (nf90_get_var(ncid, varid, radius) /= NF90_NOERR) &
+        error stop "NetCDF-4 coordinate variable read failed"
+    if (any(abs(radius - [0.0_real64, 0.5_real64, 1.0_real64]) > 1.0e-12_real64)) &
+        error stop "NetCDF-4 coordinate variable differs"
     if (nf90_inq_varid(ncid, "radius_values", varid) /= NF90_NOERR) &
         error stop "NetCDF-4 real vector lookup failed"
     if (nf90_get_var(ncid, varid, radius_values) /= NF90_NOERR) &

@@ -5,11 +5,13 @@ dimensions:
 variables:
     int count ;
     int indices(mode) ;
+    double radius(radius) ;
     double radius_values(radius) ;
     double coefficients(mode, radius) ;
 data:
     count = 3 ;
     indices = 4, 9 ;
+    radius = 0, 0.5, 1 ;
     radius_values = 1.25, -2.5, 4.75 ;
     coefficients = 1, 2, 3, 4, 5, 6 ;
 }

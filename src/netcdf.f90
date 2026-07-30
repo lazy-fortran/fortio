@@ -1050,6 +1050,11 @@ contains
                     return
                 end if
                 file%dimensions(dimension_id + 1)%length = dimensions(1)
+                if (netcdf4_is_coordinate_variable(attributes, names(i))) then
+                    call append_netcdf4_variable(file, names(i), type_class, element_size, &
+                        attributes, status)
+                    if (.not. status%ok()) return
+                end if
             else
                 call append_netcdf4_variable(file, names(i), type_class, element_size, &
                     attributes, status)
@@ -1072,6 +1077,20 @@ contains
             return
         end do
     end function netcdf4_coordinate_id
+
+    logical function netcdf4_is_coordinate_variable(attributes, name)
+        type(hdf5_attribute_t), intent(in) :: attributes(:)
+        character(len=*), intent(in) :: name
+        integer :: i
+
+        netcdf4_is_coordinate_variable = .false.
+        do i = 1, size(attributes)
+            if (attributes(i)%name /= "NAME") cycle
+            if (.not. allocated(attributes(i)%value_text)) return
+            netcdf4_is_coordinate_variable = attributes(i)%value_text == trim(name)
+            return
+        end do
+    end function netcdf4_is_coordinate_variable
 
     subroutine append_netcdf4_variable(file, name, type_class, element_size, attributes, &
             status)
