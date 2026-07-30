@@ -8,7 +8,7 @@ program test_netcdf4_read
     character(len=1024) :: fixture, cdl, command
     character(len=16) :: convention, units
     integer(int32) :: count, indices(2)
-    real(real64) :: radius(3), radius_values(3), coefficients(3, 2)
+    real(real64) :: radius(3), radius_values(3), coefficients(3, 2), torflux
     integer :: ncid, dimid, varid, length, command_status, attribute_type
 
     call get_command_argument(1, fixture)
@@ -68,5 +68,9 @@ program test_netcdf4_read
     if (nf90_get_att(ncid, NF90_GLOBAL, "zeta_convention", convention) /= NF90_NOERR) &
         error stop "NetCDF-4 global attribute read failed"
     if (trim(convention) /= "cyl") error stop "NetCDF-4 global attribute differs"
+    if (nf90_get_att(ncid, NF90_GLOBAL, "torflux", torflux) /= NF90_NOERR) &
+        error stop "NetCDF-4 numeric global attribute read failed"
+    if (abs(torflux - 1.25_real64) > 1.0e-12_real64) &
+        error stop "NetCDF-4 numeric global attribute differs"
     if (nf90_close(ncid) /= NF90_NOERR) error stop "NetCDF-4 oracle close failed"
 end program test_netcdf4_read

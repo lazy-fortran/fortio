@@ -126,6 +126,12 @@ if(FORTIO_BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/netcdf4-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/netcdf4-oracle.cdl")
 
+    add_executable(test_dense_attribute test/test_dense_attribute.f90)
+    target_link_libraries(test_dense_attribute PRIVATE fortio)
+    add_test(NAME dense_attribute COMMAND test_dense_attribute
+        "${CMAKE_CURRENT_BINARY_DIR}/dense-attribute-oracle.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py")
+
     add_executable(test_netcdf_attributes test/test_netcdf_attributes.f90)
     target_link_libraries(test_netcdf_attributes PRIVATE fortio)
     add_test(NAME netcdf_attributes COMMAND test_netcdf_attributes

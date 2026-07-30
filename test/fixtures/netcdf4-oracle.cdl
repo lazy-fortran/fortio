@@ -11,7 +11,12 @@ variables:
     double coefficients(mode, radius) ;
 
 // global attributes:
+        :rho_convention = "rho_tor" ;
         :zeta_convention = "cyl" ;
+        :rho_lcfs = 1. ;
+        :boozer_field = 1 ;
+        :torflux = 1.25 ;
+        :gvec2chartmap_boozer_factor = 1LL ;
 data:
     count = 3 ;
     indices = 4, 9 ;
