@@ -1346,11 +1346,22 @@ contains
     subroutine set_group_handle(slot, root, mode, prefix)
         integer, intent(in) :: slot, root, mode
         character(len=*), intent(in) :: prefix
+        character(len=:), allocatable :: clean_prefix
+
+        clean_prefix = trim(adjustl(prefix))
+        do while (len(clean_prefix) > 0)
+            if (clean_prefix(1:1) /= "/") exit
+            clean_prefix = clean_prefix(2:)
+        end do
+        do while (len(clean_prefix) > 0)
+            if (clean_prefix(len(clean_prefix):len(clean_prefix)) /= "/") exit
+            clean_prefix = clean_prefix(:len(clean_prefix) - 1)
+        end do
 
         handle_mode(slot) = mode
         root_slot(slot) = root
         root_handle(slot) = .false.
-        handle_prefix(slot) = trim(prefix)
+        handle_prefix(slot) = clean_prefix
     end subroutine set_group_handle
 
     subroutine close_root(slot)
