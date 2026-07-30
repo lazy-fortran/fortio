@@ -1,5 +1,5 @@
 module hdf5_tools
-    use, intrinsic :: iso_fortran_env, only: int32, int64, real64
+    use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
     use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP
@@ -80,6 +80,7 @@ module hdf5_tools
     public :: h5_delete, h5_define_unlimited_array, h5_define_unlimited_matrix, h5_append
     public :: h5_append_double_0, h5_append_double_1
     public :: h5_add_int, h5_add_double_0, h5_add_double_1, h5_add_string
+    public :: h5_add_float_1
     public :: h5_add_complex_1, h5_get_double_1, h5_get_bounds_1
     public :: h5_copy
 
@@ -268,6 +269,7 @@ contains
         real(real64) :: r0
         real(real64), allocatable :: r1(:), r2(:, :), r3(:, :, :)
         real(real64), allocatable :: r4(:, :, :, :), r5(:, :, :, :, :)
+        real(real32), allocatable :: r32_1(:)
         complex(real64), allocatable :: c1(:), c2(:, :), c3(:, :, :)
         character(len=:), allocatable :: text
         type(hdf5_attribute_t), allocatable :: attributes(:)
@@ -303,34 +305,42 @@ contains
                 call status%set(FORTIO_ENOTSUP, "integer HDF5 copy rank is not supported")
             end select
         case (1)
-            select case (rank)
-            case (0)
-                call files(source_root)%read_r64_scalar(source_path, r0, status)
-                if (status%ok()) call writers(destination_root)%add_r64_scalar( &
-                    destination_path, r0, status)
-            case (1)
+            if (element_size == 4 .and. rank == 1) then
                 call files(source_root)%read_r64_1(source_path, r1, status)
-                if (status%ok()) call writers(destination_root)%add_r64_1( &
-                    destination_path, r1, status)
-            case (2)
-                call files(source_root)%read_r64_2(source_path, r2, status)
-                if (status%ok()) call writers(destination_root)%add_r64_2( &
-                    destination_path, r2, status)
-            case (3)
-                call files(source_root)%read_r64_3(source_path, r3, status)
-                if (status%ok()) call writers(destination_root)%add_r64_3( &
-                    destination_path, r3, status)
-            case (4)
-                call files(source_root)%read_r64_4(source_path, r4, status)
-                if (status%ok()) call writers(destination_root)%add_r64_4( &
-                    destination_path, r4, status)
-            case (5)
-                call files(source_root)%read_r64_5(source_path, r5, status)
-                if (status%ok()) call writers(destination_root)%add_r64_5( &
-                    destination_path, r5, status)
-            case default
-                call status%set(FORTIO_ENOTSUP, "real HDF5 copy rank is not supported")
-            end select
+                if (status%ok()) then
+                    r32_1 = real(r1, real32)
+                    call writers(destination_root)%add_r32_1(destination_path, r32_1, status)
+                end if
+            else
+                select case (rank)
+                case (0)
+                    call files(source_root)%read_r64_scalar(source_path, r0, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_scalar( &
+                        destination_path, r0, status)
+                case (1)
+                    call files(source_root)%read_r64_1(source_path, r1, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_1( &
+                        destination_path, r1, status)
+                case (2)
+                    call files(source_root)%read_r64_2(source_path, r2, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_2( &
+                        destination_path, r2, status)
+                case (3)
+                    call files(source_root)%read_r64_3(source_path, r3, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_3( &
+                        destination_path, r3, status)
+                case (4)
+                    call files(source_root)%read_r64_4(source_path, r4, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_4( &
+                        destination_path, r4, status)
+                case (5)
+                    call files(source_root)%read_r64_5(source_path, r5, status)
+                    if (status%ok()) call writers(destination_root)%add_r64_5( &
+                        destination_path, r5, status)
+                case default
+                    call status%set(FORTIO_ENOTSUP, "real HDF5 copy rank is not supported")
+                end select
+            end if
         case (3)
             call files(source_root)%read_text_scalar(source_path, text, status)
             if (status%ok()) call writers(destination_root)%add_text_scalar( &
@@ -1150,6 +1160,24 @@ contains
         call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
         call add_accuracy_attribute(require_mode(h5id, MODE_WRITE), dataset, accuracy)
     end subroutine h5_add_double_1
+
+    subroutine h5_add_float_1(h5id, dataset, value, lbounds, ubounds, comment, unit)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        real(real32), intent(in) :: value(:)
+        integer, intent(in) :: lbounds(:), ubounds(:)
+        character(len=*), intent(in), optional :: comment, unit
+        type(fortio_status_t) :: status
+        integer :: slot
+
+        call require_bounds(shape(value), lbounds, ubounds)
+        slot = require_mode(h5id, MODE_WRITE)
+        call prepare_overwrite(slot, dataset)
+        call writers(root_slot(slot))%add_r32_1(joined_path(slot, dataset), value, status)
+        call require_ok(status)
+        call add_bounds_attributes(slot, dataset, lbounds, ubounds)
+        call add_common_attributes(slot, dataset, comment, unit)
+    end subroutine h5_add_float_1
 
     subroutine h5_add_double_1_nobounds(h5id, dataset, value, comment, unit, default, &
             accuracy)

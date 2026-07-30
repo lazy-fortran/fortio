@@ -40,6 +40,7 @@ module fortio_bytes
         procedure :: write_be_r64 => writer_write_be_r64
         procedure :: write_le_i32 => writer_write_le_i32
         procedure :: write_le_i64 => writer_write_le_i64
+        procedure :: write_le_r32 => writer_write_le_r32
         procedure :: write_le_r64 => writer_write_le_r64
         procedure :: write_bytes => writer_write_bytes
     end type byte_writer_t
@@ -57,7 +58,7 @@ contains
 
         call status%clear()
         open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-             action="write", status="replace", iostat=io_status, iomsg=io_message)
+            action="write", status="replace", iostat=io_status, iomsg=io_message)
         if (io_status /= 0) then
             call status%set(FORTIO_EIO, trim(io_message))
             this%unit = -1
@@ -198,6 +199,14 @@ contains
         call this%write_le_i64(transfer(value, 0_int64), status)
     end subroutine writer_write_le_r64
 
+    subroutine writer_write_le_r32(this, value, status)
+        class(byte_writer_t), intent(inout) :: this
+        real(real32), intent(in) :: value
+        type(fortio_status_t), intent(inout) :: status
+
+        call this%write_le_i32(transfer(value, 0_int32), status)
+    end subroutine writer_write_le_r32
+
     subroutine reader_open(this, path, status)
         class(byte_reader_t), intent(inout) :: this
         character(len=*), intent(in) :: path
@@ -207,7 +216,7 @@ contains
 
         call status%clear()
         open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-             action="read", status="old", iostat=io_status, iomsg=io_message)
+            action="read", status="old", iostat=io_status, iomsg=io_message)
         if (io_status /= 0) then
             call status%set(FORTIO_EIO, trim(io_message))
             this%unit = -1
@@ -328,7 +337,7 @@ contains
         call this%read_bytes(bytes, status)
         if (.not. status%ok()) return
         value = int(ior(byte_value(bytes(1)), &
-                        shiftl(byte_value(bytes(2)), 8)), int16)
+            shiftl(byte_value(bytes(2)), 8)), int16)
     end subroutine reader_read_le_i16
 
     subroutine reader_read_le_i32(this, value, status)
@@ -387,7 +396,7 @@ contains
         integer(int8), intent(in) :: bytes(2)
 
         decode_be_i16 = int(ior(shiftl(byte_value(bytes(1)), 8), &
-                               byte_value(bytes(2))), int16)
+            byte_value(bytes(2))), int16)
     end function decode_be_i16
 
     pure integer(int32) function decode_be_i32(bytes)

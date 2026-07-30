@@ -1,5 +1,5 @@
 module fortio_hdf5_writer
-    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real64
+    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: byte_writer_t
     use fortio_checksum, only: lookup3_checksum
     use fortio_status, only: fortio_status_t, FORTIO_ESTATE, FORTIO_ESHAPE, &
@@ -12,6 +12,7 @@ module fortio_hdf5_writer
     integer, parameter :: TYPE_TEXT = 3
     integer, parameter :: TYPE_C64 = 4
     integer, parameter :: TYPE_I64 = 5
+    integer, parameter :: TYPE_R32 = 6
     integer(int64), parameter :: ROOT_ADDRESS = 48_int64
 
     type :: hdf5_output_attribute_t
@@ -30,6 +31,7 @@ module fortio_hdf5_writer
         integer(int32), allocatable :: values_i32(:)
         integer(int64), allocatable :: values_i64(:)
         real(real64), allocatable :: values_r64(:)
+        real(real32), allocatable :: values_r32(:)
         character(len=:), allocatable :: value_text
         complex(real64), allocatable :: values_c64(:)
         type(hdf5_output_attribute_t), allocatable :: attributes(:)
@@ -58,6 +60,7 @@ module fortio_hdf5_writer
         procedure :: add_i32_3 => hdf5_add_i32_3
         procedure :: add_i64_1 => hdf5_add_i64_1
         procedure :: add_r64_scalar => hdf5_add_r64_scalar
+        procedure :: add_r32_1 => hdf5_add_r32_1
         procedure :: add_r64_1 => hdf5_add_r64_1
         procedure :: add_r64_2 => hdf5_add_r64_2
         procedure :: add_r64_3 => hdf5_add_r64_3
@@ -174,6 +177,26 @@ contains
 
         call add_r64_flat(this, name, [integer(int64) ::], [value], status)
     end subroutine hdf5_add_r64_scalar
+
+    subroutine hdf5_add_r32_1(this, name, values, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: name
+        real(real32), intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_output_dataset_t) :: dataset
+        character(len=:), allocatable :: leaf_name
+        integer :: parent_group
+
+        if (.not. prepare_dataset(this, name, [int(size(values), int64)], &
+            size(values, kind=int64), parent_group, leaf_name, status)) return
+        dataset%name = leaf_name
+        dataset%parent_group = parent_group
+        dataset%type_code = TYPE_R32
+        dataset%dimensions = [int(size(values), int64)]
+        dataset%values_r32 = values
+        allocate(dataset%attributes(0))
+        call append_dataset(this%datasets, dataset)
+    end subroutine hdf5_add_r32_1
 
     subroutine hdf5_add_text_scalar(this, name, value, status)
         class(hdf5_writer_t), intent(inout) :: this
@@ -686,6 +709,11 @@ contains
                     call writer%write_le_r64(this%datasets(i)%values_r64(j), status)
                     if (.not. status%ok()) return
                 end do
+            case (TYPE_R32)
+                do j = 1, size(this%datasets(i)%values_r32)
+                    call writer%write_le_r32(this%datasets(i)%values_r32(j), status)
+                    if (.not. status%ok()) return
+                end do
             case (TYPE_TEXT)
                 do j = 1, len(this%datasets(i)%value_text)
                     call writer%write_i8(int(iachar(this%datasets(i)%value_text(j:j)), int8), &
@@ -743,7 +771,7 @@ contains
         select case (dataset%type_code)
         case (TYPE_I32, TYPE_I64)
             datatype_size = 12
-        case (TYPE_R64)
+        case (TYPE_R32, TYPE_R64)
             datatype_size = 20
         case (TYPE_TEXT)
             datatype_size = 8
@@ -790,6 +818,8 @@ contains
             total = 8_int64*size(dataset%values_i64, kind=int64)
         else if (dataset%type_code == TYPE_R64) then
             total = 8_int64*size(dataset%values_r64, kind=int64)
+        else if (dataset%type_code == TYPE_R32) then
+            total = 4_int64*size(dataset%values_r32, kind=int64)
         else if (dataset%type_code == TYPE_C64) then
             total = 16_int64*size(dataset%values_c64, kind=int64)
         else
@@ -900,6 +930,12 @@ contains
                 int(z'3f', int8), 0_int8, 8_int8, 0_int8, 0_int8, 0_int8, &
                 0_int8, 0_int8, int(z'40', int8), 0_int8, int(z'34', int8), &
                 int(z'0b', int8), 0_int8, int(z'34', int8), -1_int8, 3_int8, &
+                0_int8, 0_int8])
+        else if (dataset%type_code == TYPE_R32) then
+            call append_values(payload, [int(z'11', int8), int(z'20', int8), &
+                int(z'1f', int8), 0_int8, 4_int8, 0_int8, 0_int8, 0_int8, &
+                0_int8, 0_int8, int(z'20', int8), 0_int8, int(z'17', int8), &
+                8_int8, 0_int8, int(z'17', int8), int(z'7f', int8), 0_int8, &
                 0_int8, 0_int8])
         else if (dataset%type_code == TYPE_TEXT) then
             call append_values(payload, [int(z'13', int8), 0_int8, 0_int8, 0_int8])

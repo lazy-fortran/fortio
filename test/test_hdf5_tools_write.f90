@@ -1,10 +1,10 @@
 program test_hdf5_tools_write
-    use, intrinsic :: iso_fortran_env, only: int64, real64
+    use, intrinsic :: iso_fortran_env, only: int64, real32, real64
     use hdf5_tools, only: HID_T, h5_add, h5_append, h5_close, h5_close_group, h5_create, &
         h5_create_parent_groups, h5_define_group, h5_get, h5_isvalid, &
         h5_open, h5_open_group, h5overwrite, h5_delete, &
         h5_define_unlimited_array, h5_define_unlimited_matrix, h5_append_double_1, &
-        h5_exists, h5_open_rw, h5_copy
+        h5_exists, h5_open_rw, h5_copy, h5_add_float_1
     use hdf5_tools_f2003, only: H5T_NATIVE_DOUBLE, H5T_NATIVE_INTEGER
     implicit none
 
@@ -26,6 +26,7 @@ program test_hdf5_tools_write
     logical :: found_accuracy_value
     logical :: found_string, found_complex
     logical :: found_stream_matrix, found_stream_matrix_values
+    logical :: found_float32
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/hdf5-tools-written.h5"
@@ -43,6 +44,7 @@ program test_hdf5_tools_write
     call h5_add(file_id, "tolerance", 0.25_real64, accuracy=1.0e-8_real64)
     call h5_add(file_id, "label", "stellarator", "configuration label")
     call h5_add(file_id, "enabled", .true.)
+    call h5_add_float_1(file_id, "float_vector", [1.25_real32, 2.5_real32], [1], [2])
     call h5_add(file_id, "long_values", long_values, [1], [2])
     call h5_add(file_id, "deleted", 123)
     call h5_delete(file_id, "deleted")
@@ -140,6 +142,7 @@ program test_hdf5_tools_write
     found_complex = .false.
     found_stream_matrix = .false.
     found_stream_matrix_values = .false.
+    found_float32 = .false.
     open(newunit=unit, file=trim(dump_path), status="old", action="read")
     do
         read(unit, "(a)", iostat=exit_status) line
@@ -157,6 +160,7 @@ program test_hdf5_tools_write
         if (index(line, 'H5T_IEEE_F64LE "real"') > 0) found_complex = .true.
         if (index(line, 'DATASET "real_matrix"') > 0) found_stream_matrix = .true.
         if (index(line, '(2,0): 5, 6') > 0) found_stream_matrix_values = .true.
+        if (index(line, 'DATATYPE  H5T_IEEE_F32LE') > 0) found_float32 = .true.
     end do
     close(unit)
     if (.not. found_group) error stop "system h5dump did not find results group"
@@ -173,6 +177,7 @@ program test_hdf5_tools_write
     if (.not. found_stream_matrix) error stop "system h5dump did not find appended matrix"
     if (.not. found_stream_matrix_values) &
         error stop "system h5dump found wrong appended matrix values"
+    if (.not. found_float32) error stop "system h5dump found wrong float-vector datatype"
 
     command = "h5dump "//trim(path)//".second > /dev/null"
     call execute_command_line(trim(command), exitstat=exit_status)
