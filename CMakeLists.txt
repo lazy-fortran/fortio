@@ -4,6 +4,7 @@ project(fortio VERSION 0.1.0 LANGUAGES C Fortran)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OFF)
+option(FORTIO_INSTALL "Install fortio targets and package files" ${PROJECT_IS_TOP_LEVEL})
 
 add_library(fortio
     src/fortio_posix_io.c
@@ -163,28 +164,30 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_thread_writes.py")
 endif()
 
-install(TARGETS fortio EXPORT fortio-targets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-)
-install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/modules/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.mod")
-install(EXPORT fortio-targets NAMESPACE fortio::
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio")
+if(FORTIO_INSTALL)
+    install(TARGETS fortio EXPORT fortio-targets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    )
+    install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/modules/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.mod")
+    install(EXPORT fortio-targets NAMESPACE fortio::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio")
 
-configure_package_config_file(
-    cmake/fortio-config.cmake.in
-    "${CMAKE_CURRENT_BINARY_DIR}/fortio-config.cmake"
-    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio"
-)
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/fortio-config-version.cmake"
-    VERSION "${PROJECT_VERSION}"
-    COMPATIBILITY SameMajorVersion
-)
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/fortio-config.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/fortio-config-version.cmake"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio"
-)
+    configure_package_config_file(
+        cmake/fortio-config.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-config.cmake"
+        INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio"
+    )
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-config-version.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMajorVersion
+    )
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-config-version.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/fortio"
+    )
+endif()
