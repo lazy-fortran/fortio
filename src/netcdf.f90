@@ -32,6 +32,8 @@ module netcdf
     integer, parameter, public :: NF90_INT = NC_INT
     integer, parameter, public :: NF90_FLOAT = NC_FLOAT
     integer, parameter, public :: NF90_DOUBLE = NC_DOUBLE
+    integer, parameter, public :: NF90_INT64 = 10
+    integer, parameter, public :: NF90_STRING = 12
 
     integer, parameter :: MAX_OPEN_FILES = 32
     type(classic_file_t), save :: files(MAX_OPEN_FILES)
@@ -72,7 +74,7 @@ module netcdf
     public :: nf90_enddef, nf90_inq_varid, nf90_get_var, nf90_put_var, nf90_strerror
     public :: nf90_inq_dimid, nf90_inquire_dimension, nf90_inquire_variable
     public :: nf90_inquire_attribute, nf90_get_att
-    public :: nf90_put_att
+    public :: nf90_put_att, nf90_redef, nf90_def_grp, nf90_inq_ncid
 
 contains
 
@@ -212,6 +214,47 @@ contains
         call writers(ncid)%end_definition(status)
         code = finish_status(status)
     end function nf90_enddef
+
+    integer function nf90_redef(ncid) result(code)
+        integer, intent(in) :: ncid
+
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+            return
+        end if
+        writers(ncid)%defining = .true.
+        code = NF90_NOERR
+    end function nf90_redef
+
+    integer function nf90_def_grp(ncid, name, new_ncid) result(code)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: new_ncid
+
+        associate(unused_name => name)
+        end associate
+        new_ncid = -1
+        if (.not. valid_writer(ncid)) then
+            code = NF90_EBADID
+        else
+            code = NF90_ENOTSUPPORT
+        end if
+    end function nf90_def_grp
+
+    integer function nf90_inq_ncid(ncid, name, group_ncid) result(code)
+        integer, intent(in) :: ncid
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: group_ncid
+
+        associate(unused_name => name)
+        end associate
+        group_ncid = -1
+        if (.not. valid_id(ncid)) then
+            code = NF90_EBADID
+        else
+            code = NF90_ENOTSUPPORT
+        end if
+    end function nf90_inq_ncid
 
     integer function nf90_inq_varid(ncid, name, varid) result(code)
         integer, intent(in) :: ncid
