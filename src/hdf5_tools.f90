@@ -8,6 +8,8 @@ module hdf5_tools
 
     integer, parameter, public :: HID_T = int64
     integer, parameter, public :: dcp = real64
+    integer(HID_T), parameter, public :: H5T_NATIVE_INTEGER = 1_HID_T
+    integer(HID_T), parameter, public :: H5T_NATIVE_DOUBLE = 2_HID_T
     integer, parameter :: MAX_OPEN_FILES = 64
     integer, parameter :: MODE_READ = 1, MODE_WRITE = 2, MODE_UNLIMITED = 3
     integer, parameter :: UNLIMITED_INTEGER = 1, UNLIMITED_DOUBLE = 2
@@ -15,8 +17,10 @@ module hdf5_tools
         character(len=1024) :: path = ""
         integer :: type_code = 0
         integer :: used = 0
+        integer :: row_count = 0
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
+        real(real64), allocatable :: matrix_r64(:, :)
     end type unlimited_buffer_t
     type(fortio_file_t), save :: files(MAX_OPEN_FILES)
     type(hdf5_writer_t), save :: writers(MAX_OPEN_FILES)
@@ -49,7 +53,7 @@ module hdf5_tools
         module procedure h5_add_int_3_bounds
         module procedure h5_add_i64_1_bounds, h5_add_i64_1_nobounds
         module procedure h5_add_double_0
-        module procedure h5_add_double_1_bounds, h5_add_double_1_nobounds
+        module procedure h5_add_double_1, h5_add_double_1_nobounds
         module procedure h5_add_double_2, h5_add_double_3
         module procedure h5_add_double_4, h5_add_double_5
         module procedure h5_add_logical
@@ -64,7 +68,7 @@ module hdf5_tools
     end interface h5_get_bounds
 
     interface h5_append
-        module procedure h5_append_int, h5_append_double
+        module procedure h5_append_int, h5_append_double_0, h5_append_double_1
     end interface h5_append
 
     public :: h5_init, h5_deinit, h5_open, h5_close, h5_get
@@ -73,7 +77,10 @@ module hdf5_tools
     public :: h5_get_bounds
     public :: h5_exists, h5_obj_exists
     public :: h5_isvalid, h5_create_parent_groups
-    public :: h5_delete, h5_define_unlimited_array, h5_append
+    public :: h5_delete, h5_define_unlimited_array, h5_define_unlimited_matrix, h5_append
+    public :: h5_append_double_0, h5_append_double_1
+    public :: h5_add_int, h5_add_double_0, h5_add_double_1, h5_add_string
+    public :: h5_add_complex_1, h5_get_double_1, h5_get_bounds_1
     public :: h5_copy
 
 contains
@@ -401,6 +408,36 @@ contains
         dataset_id = int(slot, HID_T)
     end subroutine h5_define_unlimited_array
 
+    subroutine h5_define_unlimited_matrix(h5id, dataset, type_id, dimensions, dataset_id)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        integer(HID_T), intent(in) :: type_id
+        integer, intent(in) :: dimensions(:)
+        integer(HID_T), intent(out) :: dataset_id
+        integer :: root, slot, unlimited_dimension
+
+        if (size(dimensions) /= 2 .or. count(dimensions == -1) /= 1) &
+            error stop "fortio supports one unlimited dimension in a rank-2 matrix"
+        if (type_id /= H5T_NATIVE_DOUBLE) &
+            error stop "fortio supports only double unlimited matrices"
+        unlimited_dimension = findloc(dimensions, -1, dim=1)
+        if (unlimited_dimension /= 2) &
+            error stop "fortio unlimited matrix dimension must be the second dimension"
+        if (dimensions(1) < 1) error stop "fortio unlimited matrix row count must be positive"
+
+        slot = require_mode(h5id, MODE_WRITE)
+        root = root_slot(slot)
+        slot = allocate_handle()
+        handle_mode(slot) = MODE_UNLIMITED
+        root_slot(slot) = root
+        root_handle(slot) = .false.
+        unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
+        unlimited_buffers(slot)%type_code = UNLIMITED_DOUBLE
+        unlimited_buffers(slot)%row_count = dimensions(1)
+        allocate(unlimited_buffers(slot)%matrix_r64(dimensions(1), 16), source=0.0_real64)
+        dataset_id = int(slot, HID_T)
+    end subroutine h5_define_unlimited_matrix
+
     subroutine h5_append_int(dataset_id, value, position)
         integer(HID_T), intent(in) :: dataset_id
         integer, intent(in) :: value, position
@@ -422,7 +459,7 @@ contains
         unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
     end subroutine h5_append_int
 
-    subroutine h5_append_double(dataset_id, value, position)
+    subroutine h5_append_double_0(dataset_id, value, position)
         integer(HID_T), intent(in) :: dataset_id
         real(real64), intent(in) :: value
         integer, intent(in) :: position
@@ -442,7 +479,32 @@ contains
         end if
         unlimited_buffers(slot)%values_r64(position) = value
         unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
-    end subroutine h5_append_double
+    end subroutine h5_append_double_0
+
+    subroutine h5_append_double_1(dataset_id, values, position)
+        integer(HID_T), intent(in) :: dataset_id
+        real(real64), intent(in) :: values(:)
+        integer, intent(in) :: position
+        real(real64), allocatable :: temporary(:, :)
+        integer :: slot
+
+        slot = require_mode(dataset_id, MODE_UNLIMITED)
+        if (.not. allocated(unlimited_buffers(slot)%matrix_r64)) &
+            error stop "array appended to non-matrix HDF5 dataset"
+        if (size(values) /= unlimited_buffers(slot)%row_count) &
+            error stop "HDF5 appended array has the wrong size"
+        if (position < 1) error stop "HDF5 append position must be positive"
+        if (position > size(unlimited_buffers(slot)%matrix_r64, 2)) then
+            allocate(temporary(unlimited_buffers(slot)%row_count, &
+                max(position, 2*size(unlimited_buffers(slot)%matrix_r64, 2))), &
+                source=0.0_real64)
+            temporary(:, :size(unlimited_buffers(slot)%matrix_r64, 2)) = &
+                unlimited_buffers(slot)%matrix_r64
+            call move_alloc(temporary, unlimited_buffers(slot)%matrix_r64)
+        end if
+        unlimited_buffers(slot)%matrix_r64(:, position) = values
+        unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+    end subroutine h5_append_double_1
 
     subroutine h5_get_int(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -1073,7 +1135,7 @@ contains
         call add_accuracy_attribute(slot, dataset, accuracy)
     end subroutine h5_add_complex_3
 
-    subroutine h5_add_double_1_bounds(h5id, dataset, value, lbounds, ubounds, &
+    subroutine h5_add_double_1(h5id, dataset, value, lbounds, ubounds, &
             comment, unit, accuracy)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
@@ -1087,7 +1149,7 @@ contains
         call add_bounds_attributes(require_mode(h5id, MODE_WRITE), dataset, lbounds, ubounds)
         call add_common_attributes(require_mode(h5id, MODE_WRITE), dataset, comment, unit)
         call add_accuracy_attribute(require_mode(h5id, MODE_WRITE), dataset, accuracy)
-    end subroutine h5_add_double_1_bounds
+    end subroutine h5_add_double_1
 
     subroutine h5_add_double_1_nobounds(h5id, dataset, value, comment, unit, default, &
             accuracy)
@@ -1284,8 +1346,15 @@ contains
                 call writers(root)%add_i32_1(trim(unlimited_buffers(slot)%path), &
                     unlimited_buffers(slot)%values_i32(:unlimited_buffers(slot)%used), status)
             case (UNLIMITED_DOUBLE)
-                call writers(root)%add_r64_1(trim(unlimited_buffers(slot)%path), &
-                    unlimited_buffers(slot)%values_r64(:unlimited_buffers(slot)%used), status)
+                if (allocated(unlimited_buffers(slot)%matrix_r64)) then
+                    call writers(root)%add_r64_2(trim(unlimited_buffers(slot)%path), &
+                        unlimited_buffers(slot)%matrix_r64(:, :unlimited_buffers(slot)%used), &
+                        status)
+                else
+                    call writers(root)%add_r64_1(trim(unlimited_buffers(slot)%path), &
+                        unlimited_buffers(slot)%values_r64(:unlimited_buffers(slot)%used), &
+                        status)
+                end if
             end select
             call require_ok(status)
         end do
@@ -1321,10 +1390,13 @@ contains
         unlimited_buffers(slot)%path = ""
         unlimited_buffers(slot)%type_code = 0
         unlimited_buffers(slot)%used = 0
+        unlimited_buffers(slot)%row_count = 0
         if (allocated(unlimited_buffers(slot)%values_i32)) &
             deallocate(unlimited_buffers(slot)%values_i32)
         if (allocated(unlimited_buffers(slot)%values_r64)) &
             deallocate(unlimited_buffers(slot)%values_r64)
+        if (allocated(unlimited_buffers(slot)%matrix_r64)) &
+            deallocate(unlimited_buffers(slot)%matrix_r64)
     end subroutine clear_handle
 
     function joined_path(slot, name) result(path)
