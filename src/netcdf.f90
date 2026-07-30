@@ -8,6 +8,7 @@ module netcdf
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
         FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST
+    use fortio_posix, only: handle_table_lock, handle_table_unlock
     implicit none
     private
 
@@ -102,7 +103,7 @@ contains
             last_error = "classic compatibility writer is not implemented"
             return
         end if
-        slot = first_free_slot()
+        slot = claim_free_slot()
         if (slot == 0) then
             code = NF90_EBADID
             last_error = "fortio open-file table is full"
@@ -115,12 +116,12 @@ contains
             if (.not. status%ok()) then
                 code = status%code
                 last_error = status%message
+                call release_slot(slot)
                 return
             end if
             netcdf4_reading(slot) = .true.
         end if
         code = NF90_NOERR
-        in_use(slot) = .true.
         ncid = slot
     end function nf90_open
 
@@ -143,7 +144,7 @@ contains
             last_error = "file already exists: "//trim(path)
             return
         end if
-        slot = first_free_slot()
+        slot = claim_free_slot()
         if (slot == 0) then
             code = NF90_EBADID
             last_error = "fortio open-file table is full"
@@ -153,9 +154,9 @@ contains
         code = status%code
         if (.not. status%ok()) then
             last_error = status%message
+            call release_slot(slot)
             return
         end if
-        in_use(slot) = .true.
         writing(slot) = .true.
         ncid = slot
     end function nf90_create
@@ -179,9 +180,9 @@ contains
         else
             call files(ncid)%close(status)
         end if
-        in_use(ncid) = .false.
         writing(ncid) = .false.
         netcdf4_reading(ncid) = .false.
+        call release_slot(ncid)
         code = status%code
         if (.not. status%ok()) last_error = status%message
     end function nf90_close
@@ -937,6 +938,21 @@ contains
             end if
         end do
     end function first_free_slot
+
+    integer function claim_free_slot() result(slot)
+        call handle_table_lock()
+        slot = first_free_slot()
+        if (slot /= 0) in_use(slot) = .true.
+        call handle_table_unlock()
+    end function claim_free_slot
+
+    subroutine release_slot(slot)
+        integer, intent(in) :: slot
+
+        call handle_table_lock()
+        in_use(slot) = .false.
+        call handle_table_unlock()
+    end subroutine release_slot
 
     integer function writer_variable_id(ncid, name) result(varid)
         integer, intent(in) :: ncid

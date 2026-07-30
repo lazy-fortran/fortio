@@ -4,7 +4,8 @@ module fortio_posix
     private
 
     public :: posix_open_read, posix_open_write, posix_close, posix_pread, posix_pwrite
-    public :: mapped_open, mapped_copy, mapped_close
+    public :: mapped_open, mapped_copy, mapped_copy_swap64, mapped_close
+    public :: handle_table_lock, handle_table_unlock
 
     interface
         function posix_open_read(path) bind(C, name="fortio_posix_open_read") result(descriptor)
@@ -60,10 +61,25 @@ module fortio_posix
             integer(c_int64_t) :: bytes_copied
         end function mapped_copy
 
+        function mapped_copy_swap64(mapping, buffer, count, offset) &
+                bind(C, name="fortio_mapped_copy_swap64") result(bytes_copied)
+            import :: c_int64_t, c_ptr, c_size_t
+            type(c_ptr), value :: mapping, buffer
+            integer(c_size_t), value :: count
+            integer(c_int64_t), value :: offset
+            integer(c_int64_t) :: bytes_copied
+        end function mapped_copy_swap64
+
         function mapped_close(mapping) bind(C, name="fortio_mapped_close") result(code)
             import :: c_int, c_ptr
             type(c_ptr), value :: mapping
             integer(c_int) :: code
         end function mapped_close
+
+        subroutine handle_table_lock() bind(C, name="fortio_handle_table_lock")
+        end subroutine handle_table_lock
+
+        subroutine handle_table_unlock() bind(C, name="fortio_handle_table_unlock")
+        end subroutine handle_table_unlock
     end interface
 end module fortio_posix

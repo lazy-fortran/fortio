@@ -2,8 +2,8 @@ module fortio_bytes
     use, intrinsic :: iso_c_binding, only: c_associated, c_int, c_int64_t, c_loc, &
         c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
-    use fortio_posix, only: mapped_close, mapped_copy, mapped_open, posix_close, &
-        posix_open_read, posix_open_write, posix_pwrite
+    use fortio_posix, only: mapped_close, mapped_copy, mapped_copy_swap64, mapped_open, &
+        posix_close, posix_open_read, posix_open_write, posix_pwrite
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -275,42 +275,17 @@ contains
         character(len=*), intent(in) :: path
         type(fortio_status_t), intent(inout) :: status
         integer :: io_status
-        character(len=512) :: io_message
 
         call status%clear()
-        open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-            action="read", status="old", convert="big_endian", &
-            iostat=io_status, iomsg=io_message)
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
-            this%unit = -1
-            return
-        end if
-        open(newunit=this%native_unit, file=path, access="stream", form="unformatted", &
-            action="read", status="old", iostat=io_status, iomsg=io_message)
-        if (io_status /= 0) then
-            close(this%unit)
-            this%unit = -1
-            call status%set(FORTIO_EIO, trim(io_message))
-            return
-        end if
         this%descriptor = posix_open_read(trim(path)//c_null_char)
         if (this%descriptor < 0_c_int) then
-            close(this%native_unit)
-            close(this%unit)
-            this%native_unit = -1
-            this%unit = -1
             call status%set(FORTIO_EIO, "POSIX open failed")
             return
         end if
         this%mapping = mapped_open(this%descriptor)
         if (.not. c_associated(this%mapping)) then
             io_status = posix_close(this%descriptor)
-            close(this%native_unit)
-            close(this%unit)
             this%descriptor = -1_c_int
-            this%native_unit = -1
-            this%unit = -1
             call status%set(FORTIO_EIO, "memory mapping failed")
             return
         end if
@@ -321,20 +296,10 @@ contains
         class(byte_reader_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
         integer :: io_status
-        character(len=512) :: io_message
 
         call status%clear()
-        if (this%unit == -1) return
-        close(this%unit, iostat=io_status, iomsg=io_message)
-        if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
-        if (this%native_unit /= -1) then
-            close(this%native_unit, iostat=io_status, iomsg=io_message)
-            if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
-        end if
         if (c_associated(this%mapping)) io_status = mapped_close(this%mapping)
         if (this%descriptor >= 0_c_int) io_status = posix_close(this%descriptor)
-        this%unit = -1
-        this%native_unit = -1
         this%descriptor = -1_c_int
         this%mapping = c_null_ptr
         this%position = 1_int64
@@ -349,18 +314,19 @@ contains
 
     subroutine reader_read_bytes(this, values, status)
         class(byte_reader_t), intent(inout) :: this
-        integer(int8), intent(out) :: values(:)
+        integer(int8), contiguous, target, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
-        character(len=512) :: io_message
+        integer(c_int64_t) :: byte_count, bytes_read
 
         call status%clear()
-        read(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
+        byte_count = size(values, kind=c_int64_t)
+        bytes_read = mapped_copy(this%mapping, c_loc(values), int(byte_count, c_size_t), &
+            int(this%position - 1_int64, c_int64_t))
+        if (bytes_read /= byte_count) then
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
             return
         end if
-        this%position = this%position + size(values, kind=int64)
+        this%position = this%position + int(byte_count, int64)
     end subroutine reader_read_bytes
 
     subroutine reader_read_i8(this, value, status)
@@ -433,16 +399,22 @@ contains
         class(byte_reader_t), intent(inout) :: this
         real(real64), contiguous, target, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
-        character(len=512) :: io_message
+        integer(c_int64_t) :: byte_count, bytes_read
 
         call status%clear()
-        read(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
+        byte_count = 8_c_int64_t*size(values, kind=c_int64_t)
+        if (host_is_little_endian()) then
+            bytes_read = mapped_copy_swap64(this%mapping, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+        else
+            bytes_read = mapped_copy(this%mapping, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+        end if
+        if (bytes_read /= byte_count) then
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
             return
         end if
-        this%position = this%position + 8_int64*size(values, kind=int64)
+        this%position = this%position + int(byte_count, int64)
     end subroutine reader_read_be_r64_array
 
     subroutine reader_read_le_i16(this, value, status)
