@@ -21,6 +21,7 @@ add_library(fortio
     src/fortio_hdf5_writer.f90
     src/fortio.f90
     src/hdf5_tools.f90
+    src/h5lt.f90
     src/hdf5_tools_f2003.f90
     src/netcdf.f90
 )
