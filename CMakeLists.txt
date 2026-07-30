@@ -73,6 +73,11 @@ if(BUILD_TESTING)
     target_link_libraries(test_bytes PRIVATE fortio)
     add_test(NAME bytes COMMAND test_bytes)
 
+    add_executable(test_platform_io test/test_platform_io.f90)
+    target_link_libraries(test_platform_io PRIVATE fortio)
+    add_test(NAME platform_io COMMAND test_platform_io
+        "${CMAKE_CURRENT_BINARY_DIR}/platform-io.bin")
+
     add_executable(test_classic_read test/test_classic_read.f90)
     target_link_libraries(test_classic_read PRIVATE fortio)
     add_test(NAME classic_read COMMAND test_classic_read
