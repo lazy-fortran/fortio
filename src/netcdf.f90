@@ -46,6 +46,7 @@ module netcdf
         module procedure get_char_scalar, get_char_rank1
         module procedure get_i32_scalar, get_i32_rank1
         module procedure get_r64_scalar, get_r64_rank1, get_r64_rank2, get_r64_rank3
+        module procedure get_r64_rank4
     end interface nf90_get_var
 
     interface nf90_def_var
@@ -673,6 +674,26 @@ contains
                                             first(3):last(3))
         code = finish_status(status)
     end function get_r64_rank3
+
+    integer function get_r64_rank4(ncid, varid, value, start, count) result(code)
+        integer, intent(in) :: ncid, varid
+        real(real64), intent(out) :: value(:, :, :, :)
+        integer, intent(in), optional :: start(:), count(:)
+        real(real64), allocatable :: temporary(:, :, :, :)
+        type(fortio_status_t) :: status
+        integer :: first(4), last(4)
+
+        if (.not. prepare_get(ncid, varid, status)) then
+            code = status%code
+            return
+        end if
+        call files(ncid)%read_r64_4(files(ncid)%variables(varid)%name, temporary, status)
+        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+                                            first, last, status)
+        if (status%ok()) value = temporary(first(1):last(1), first(2):last(2), &
+                                            first(3):last(3), first(4):last(4))
+        code = finish_status(status)
+    end function get_r64_rank4
 
     integer function put_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid

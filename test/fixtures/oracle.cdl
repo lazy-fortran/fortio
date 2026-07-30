@@ -3,6 +3,7 @@ dimensions:
     x = 3 ;
     y = 2 ;
     z = 2 ;
+    w = 2 ;
     string_length = 5 ;
     group = 2 ;
     one = 1 ;
@@ -12,6 +13,7 @@ variables:
         x_values:units = "m" ;
     double matrix(y, x) ;
     double cube(z, y, x) ;
+    double hypercube(w, z, y, x) ;
     char coil_group(group, string_length) ;
     char mgrid_mode(one) ;
 
@@ -23,6 +25,8 @@ data:
     x_values = 1.25, -2.5, 4.75 ;
     matrix = 1, 2, 3, 4, 5, 6 ;
     cube = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ;
+    hypercube = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ;
     coil_group = "alpha", "beta " ;
     mgrid_mode = "S" ;
 
