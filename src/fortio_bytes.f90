@@ -3,7 +3,7 @@ module fortio_bytes
         c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_posix, only: mapped_close, mapped_copy, mapped_copy_swap64, mapped_open, &
-        posix_close, posix_open_read, posix_open_write, posix_pwrite
+        posix_close, posix_create_write, posix_open_read, posix_pwrite, posix_pwrite_swap64
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -35,7 +35,6 @@ module fortio_bytes
     end type byte_reader_t
 
     type, public :: byte_writer_t
-        integer :: unit = -1
         integer(c_int) :: descriptor = -1_c_int
         integer(int64) :: position = 1_int64
     contains
@@ -65,23 +64,10 @@ contains
         class(byte_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
-        character(len=512) :: io_message
-
         call status%clear()
-        open(newunit=this%unit, file=path, access="stream", form="unformatted", &
-            action="write", status="replace", convert="big_endian", &
-            iostat=io_status, iomsg=io_message)
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
-            this%unit = -1
-            return
-        end if
-        this%descriptor = posix_open_write(trim(path)//c_null_char)
+        this%descriptor = posix_create_write(trim(path)//c_null_char)
         if (this%descriptor < 0_c_int) then
-            close(this%unit)
-            this%unit = -1
-            call status%set(FORTIO_EIO, "POSIX open failed")
+            call status%set(FORTIO_EIO, "POSIX create failed")
             return
         end if
         this%position = 1_int64
@@ -91,14 +77,11 @@ contains
         class(byte_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
         integer :: io_status
-        character(len=512) :: io_message
 
         call status%clear()
-        if (this%unit == -1) return
-        close(this%unit, iostat=io_status, iomsg=io_message)
-        if (io_status /= 0) call status%set(FORTIO_EIO, trim(io_message))
-        if (this%descriptor >= 0_c_int) io_status = posix_close(this%descriptor)
-        this%unit = -1
+        if (this%descriptor < 0_c_int) return
+        io_status = posix_close(this%descriptor)
+        if (io_status /= 0) call status%set(FORTIO_EIO, "POSIX close failed")
         this%descriptor = -1_c_int
         this%position = 1_int64
     end subroutine writer_close
@@ -112,18 +95,19 @@ contains
 
     subroutine writer_write_bytes(this, values, status)
         class(byte_writer_t), intent(inout) :: this
-        integer(int8), intent(in) :: values(:)
+        integer(int8), contiguous, target, intent(in) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
-        character(len=512) :: io_message
+        integer(c_int64_t) :: byte_count, bytes_written
 
         call status%clear()
-        write(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
+        byte_count = size(values, kind=c_int64_t)
+        bytes_written = posix_pwrite(this%descriptor, c_loc(values), &
+            int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+        if (bytes_written /= byte_count) then
+            call status%set(FORTIO_EIO, "POSIX write returned incomplete data")
             return
         end if
-        this%position = this%position + size(values, kind=int64)
+        this%position = this%position + int(byte_count, int64)
     end subroutine writer_write_bytes
 
     subroutine writer_write_i8(this, value, status)
@@ -189,18 +173,24 @@ contains
 
     subroutine writer_write_be_r64_array(this, values, status)
         class(byte_writer_t), intent(inout) :: this
-        real(real64), intent(in) :: values(:)
+        real(real64), contiguous, target, intent(in) :: values(:)
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
-        character(len=512) :: io_message
+        integer(c_int64_t) :: byte_count, bytes_written
 
         call status%clear()
-        write(this%unit, pos=this%position, iostat=io_status, iomsg=io_message) values
-        if (io_status /= 0) then
-            call status%set(FORTIO_EIO, trim(io_message))
+        byte_count = 8_c_int64_t*size(values, kind=c_int64_t)
+        if (host_is_little_endian()) then
+            bytes_written = posix_pwrite_swap64(this%descriptor, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+        else
+            bytes_written = posix_pwrite(this%descriptor, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+        end if
+        if (bytes_written /= byte_count) then
+            call status%set(FORTIO_EIO, "POSIX write returned incomplete data")
             return
         end if
-        this%position = this%position + 8_int64*size(values, kind=int64)
+        this%position = this%position + int(byte_count, int64)
     end subroutine writer_write_be_r64_array
 
     subroutine writer_write_le_i32(this, value, status)

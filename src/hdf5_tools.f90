@@ -1,9 +1,11 @@
 module hdf5_tools
+    use, intrinsic :: iso_c_binding, only: c_int, c_null_char
     use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
     use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP
-    use fortio_posix, only: handle_table_lock, handle_table_unlock
+    use fortio_posix, only: handle_table_lock, handle_table_unlock, posix_path_exists, &
+        write_session_lock, write_session_unlock
     implicit none
     private
 
@@ -29,6 +31,7 @@ module hdf5_tools
     integer, save :: handle_mode(MAX_OPEN_FILES) = 0
     integer, save :: root_slot(MAX_OPEN_FILES) = 0
     logical, save :: root_handle(MAX_OPEN_FILES) = .false.
+    integer(c_int), save :: write_lock_token(MAX_OPEN_FILES) = -1_c_int
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
     type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
     logical, save, public :: h5overwrite = .false.
@@ -94,7 +97,10 @@ contains
         integer :: slot
 
         do slot = 1, MAX_OPEN_FILES
-            if (in_use(slot) .and. root_handle(slot)) call close_root(slot)
+            if (.not. in_use(slot) .or. .not. root_handle(slot)) cycle
+            call close_root(slot)
+            if (handle_mode(slot) == MODE_WRITE) &
+                call write_session_unlock(write_lock_token(slot))
         end do
         call clear_all_handles()
     end subroutine h5_deinit
@@ -118,11 +124,14 @@ contains
         integer, intent(in), optional :: opt_fileformat_version
         type(fortio_status_t) :: status
         integer :: slot
+        integer(c_int) :: lock_token
 
+        lock_token = write_session_lock(trim(filename)//c_null_char)
         slot = allocate_handle()
         call writers(slot)%create(trim(filename), status)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
+        write_lock_token(slot) = lock_token
         h5id = int(slot, HID_T)
     end subroutine h5_create
 
@@ -131,12 +140,17 @@ contains
         integer(HID_T), intent(out) :: h5id
         integer, intent(in), optional :: opt_fileformat_version
         type(fortio_status_t) :: status
-        logical :: exists
         integer :: slot
+        integer(c_int) :: lock_token
 
-        inquire(file=trim(filename), exist=exists)
-        if (.not. exists) then
-            call h5_create(filename, h5id, opt_fileformat_version)
+        lock_token = write_session_lock(trim(filename)//c_null_char)
+        if (posix_path_exists(trim(filename)//c_null_char) == 0_c_int) then
+            slot = allocate_handle()
+            call writers(slot)%create(trim(filename), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            h5id = int(slot, HID_T)
             return
         end if
         slot = allocate_handle()
@@ -145,6 +159,7 @@ contains
         call writers(slot)%create(trim(filename), status)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
+        write_lock_token(slot) = lock_token
         call copy_object(slot, "", slot, "")
         call files(slot)%close(status)
         call require_ok(status)
@@ -154,11 +169,16 @@ contains
     subroutine h5_close(h5id)
         integer(HID_T), intent(inout) :: h5id
         integer :: slot
+        logical :: writing
+        integer(c_int) :: lock_token
 
         slot = require_id(h5id)
         if (.not. root_handle(slot)) error stop "h5_close requires a file identifier"
+        writing = handle_mode(slot) == MODE_WRITE
+        lock_token = write_lock_token(slot)
         call close_root(slot)
         call invalidate_root(slot)
+        if (writing) call write_session_unlock(lock_token)
         h5id = -1_HID_T
     end subroutine h5_close
 
@@ -405,6 +425,7 @@ contains
         handle_mode(slot) = MODE_UNLIMITED
         root_slot(slot) = root
         root_handle(slot) = .false.
+        write_lock_token(slot) = -1_c_int
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
         unlimited_buffers(slot)%type_code = int(type_id)
         select case (unlimited_buffers(slot)%type_code)
@@ -1444,6 +1465,7 @@ contains
         handle_mode(slot) = 0
         root_slot(slot) = 0
         root_handle(slot) = .false.
+        write_lock_token(slot) = -1_c_int
         handle_prefix(slot) = ""
         unlimited_buffers(slot)%path = ""
         unlimited_buffers(slot)%type_code = 0
