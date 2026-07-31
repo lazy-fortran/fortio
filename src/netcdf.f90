@@ -594,7 +594,7 @@ contains
             return
         end if
         writer_varid = compatibility_writer_varid(varid)
-        call writers(ncid)%put_attribute_text(writer_varid, name, value, status)
+        call writers(ncid)%put_attribute_text(writer_varid, name, trim(value), status)
         code = finish_status(status)
     end function put_att_text
 
