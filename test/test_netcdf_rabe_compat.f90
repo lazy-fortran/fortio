@@ -5,6 +5,7 @@ program test_netcdf_rabe_compat
         NF90_GLOBAL, NF90_NOERR
     implicit none
 
+    character(len=1024) :: description
     character(len=1024) :: path
     integer :: ncid, status, variable_id
 
@@ -20,6 +21,9 @@ program test_netcdf_rabe_compat
     if (status /= NF90_NOERR) error stop "define scalar"
     status = nf90_put_att(ncid, variable_id, "long_name", "1/sqrt(nu_star) factor")
     if (status /= NF90_NOERR) error stop "put variable attribute"
+    description = "padded description"
+    status = nf90_put_att(ncid, variable_id, "description", description)
+    if (status /= NF90_NOERR) error stop "put padded variable attribute"
     status = nf90_enddef(ncid)
     if (status /= NF90_NOERR) error stop "end definition"
     status = nf90_put_var(ncid, variable_id, 1.23456789_real64)

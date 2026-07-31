@@ -195,7 +195,7 @@ if(FORTIO_BUILD_TESTING)
     set_tests_properties(netcdf_rabe_compat_oracle PROPERTIES
         DEPENDS netcdf_rabe_compat
         PASS_REGULAR_EXPRESSION
-        "title = \"RABE Bootstrap Current Analysis Results\"")
+        "description = \"padded description\" ;")
 
     add_executable(test_hdf5_read test/test_hdf5_read.f90)
     target_link_libraries(test_hdf5_read PRIVATE fortio)
