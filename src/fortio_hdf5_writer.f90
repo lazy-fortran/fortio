@@ -189,8 +189,9 @@ contains
         character(len=*), intent(in) :: name
         integer(int32), intent(in) :: value
         type(fortio_status_t), intent(inout) :: status
+        integer(int64) :: scalar_dimensions(0)
 
-        call add_i32_flat(this, name, [integer(int64) ::], [value], status)
+        call add_i32_flat(this, name, scalar_dimensions, [value], status)
     end subroutine hdf5_add_i32_scalar
 
     subroutine hdf5_add_i8(this, name, dimensions, values, status)
@@ -304,8 +305,9 @@ contains
         character(len=*), intent(in) :: name
         real(real64), intent(in) :: value
         type(fortio_status_t), intent(inout) :: status
+        integer(int64) :: scalar_dimensions(0)
 
-        call add_r64_flat(this, name, [integer(int64) ::], [value], status)
+        call add_r64_flat(this, name, scalar_dimensions, [value], status)
     end subroutine hdf5_add_r64_scalar
 
     subroutine hdf5_add_r32_1(this, name, values, status)
@@ -335,13 +337,14 @@ contains
         type(hdf5_output_dataset_t) :: dataset
         character(len=:), allocatable :: leaf_name
         integer :: parent_group
+        integer(int64) :: scalar_dimensions(0)
 
-        if (.not. prepare_dataset(this, name, [integer(int64) ::], 1_int64, &
+        if (.not. prepare_dataset(this, name, scalar_dimensions, 1_int64, &
             parent_group, leaf_name, status)) return
         dataset%name = leaf_name
         dataset%parent_group = parent_group
         dataset%type_code = TYPE_TEXT
-        dataset%dimensions = [integer(int64) ::]
+        dataset%dimensions = scalar_dimensions
         if (len_trim(value) == 0) then
             dataset%value_text = achar(0)
         else

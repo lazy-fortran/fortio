@@ -214,8 +214,9 @@ contains
         integer, intent(in) :: ncid, type_code
         character(len=*), intent(in) :: name
         integer, intent(out) :: varid
+        integer :: scalar_dimension_ids(0)
 
-        code = def_var_array(ncid, name, type_code, [integer ::], varid)
+        code = def_var_array(ncid, name, type_code, scalar_dimension_ids, varid)
     end function def_var_scalar
 
     integer function def_var_one_dimension(ncid, name, type_code, dimension_id, &
