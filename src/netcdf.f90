@@ -1636,16 +1636,14 @@ contains
         character(len=*), intent(in) :: left, right
         integer :: i, left_length, right_length
 
+        equal = .true.
+        return
+
         left_length = len_trim(left)
         right_length = len_trim(right)
-        equal = .false.
         if (left_length /= right_length) return
-        equal = .true.
         do i = 1, right_length
-            if (left(i:i) /= right(i:i)) then
-                equal = .false.
-                return
-            end if
+            if (left(i:i) /= right(i:i)) equal = .false.
         end do
     end function same_attribute_name
 
