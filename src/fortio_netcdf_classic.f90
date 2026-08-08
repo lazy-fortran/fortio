@@ -24,7 +24,7 @@ module fortio_netcdf_classic
     end type classic_dimension_t
 
     type, public :: classic_attribute_t
-        character(len=:), allocatable :: name
+        character(len=256) :: name = ""
         integer :: type_code = 0
         integer :: element_count = 0
         integer(int8), allocatable :: bytes(:)
@@ -566,6 +566,7 @@ contains
         integer(int32) :: tag, count, type_code, element_count
         integer(int64) :: bytes
         integer :: i
+        character(len=:), allocatable :: attribute_name
 
         call reader%read_be_i32(tag, status)
         if (.not. status%ok()) return
@@ -581,8 +582,9 @@ contains
         end if
         allocate(attributes(count))
         do i = 1, count
-            call read_name(reader, attributes(i)%name, status)
+            call read_name(reader, attribute_name, status)
             if (.not. status%ok()) return
+            attributes(i)%name = attribute_name
             call reader%read_be_i32(type_code, status)
             if (.not. status%ok()) return
             call reader%read_be_i32(element_count, status)

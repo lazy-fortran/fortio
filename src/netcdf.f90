@@ -1638,7 +1638,15 @@ contains
 
         left_length = len_trim(left)
         right_length = len_trim(right)
-        equal = left_length == right_length
+        equal = .false.
+        if (left_length /= right_length) return
+        equal = .true.
+        do i = 1, right_length
+            if (left(i:i) /= right(i:i)) then
+                equal = .false.
+                return
+            end if
+        end do
     end function same_attribute_name
 
     integer function attribute_type(ncid, varid, attribute_id) result(type_code)

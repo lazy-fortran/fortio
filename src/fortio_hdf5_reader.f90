@@ -29,7 +29,7 @@ module fortio_hdf5_reader
     end type hdf5_link_t
 
     type, public :: hdf5_attribute_t
-        character(len=:), allocatable :: name
+        character(len=256) :: name = ""
         integer(int32), allocatable :: values_i32(:)
         integer(int64), allocatable :: values_i64(:)
         real(real64), allocatable :: values_r64(:)
