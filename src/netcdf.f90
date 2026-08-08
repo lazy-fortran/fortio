@@ -113,6 +113,12 @@ contains
             code = NF90_EBADID
             return
         end if
+        ! A slot can be reused after either reader backend.  Set the backend
+        ! state explicitly before opening so a stale NetCDF-4 flag cannot
+        ! route a classic file through the other metadata store.
+        writing(slot) = .false.
+        writing_netcdf4(slot) = .false.
+        netcdf4_reading(slot) = .false.
         call files(slot)%open(path, status)
         if (.not. status%ok()) then
             call netcdf4_files(slot)%hdf5%open(path, status)
