@@ -466,6 +466,7 @@ contains
         integer, intent(out), optional :: xtype, len
         integer :: attribute_id
 
+        print *, 'DEBUG inquire_attribute', ncid, varid, trim(name)
         code = find_attribute(ncid, varid, name, attribute_id)
         if (code /= NF90_NOERR) return
         if (present(xtype)) xtype = attribute_type(ncid, varid, attribute_id)
