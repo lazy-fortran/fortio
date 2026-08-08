@@ -1,6 +1,7 @@
 module fortio_checksum
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64
     implicit none
+    intrinsic :: ior, shiftl, shiftr
     private
 
     integer(int64), parameter :: MASK32 = int(z'ffffffff', int64)

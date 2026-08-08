@@ -3,6 +3,7 @@ module fortio_deflate_checksums
 
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64
     implicit none
+    intrinsic :: ior, shiftl
 
     private
     public :: crc32_calculate
