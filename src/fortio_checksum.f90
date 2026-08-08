@@ -1,7 +1,7 @@
 module fortio_checksum
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64
     implicit none
-    intrinsic :: ior, shiftl, shiftr
+    intrinsic :: ior
     private
 
     integer(int64), parameter :: MASK32 = int(z'ffffffff', int64)
@@ -32,17 +32,17 @@ contains
             offset = offset + 12
             remaining = remaining - 12
         end do
-        if (remaining >= 12) c = add32(c, shiftl(byte_value(bytes(offset + 11)), 24))
-        if (remaining >= 11) c = add32(c, shiftl(byte_value(bytes(offset + 10)), 16))
-        if (remaining >= 10) c = add32(c, shiftl(byte_value(bytes(offset + 9)), 8))
+        if (remaining >= 12) c = add32(c, ishft(byte_value(bytes(offset + 11)), 24))
+        if (remaining >= 11) c = add32(c, ishft(byte_value(bytes(offset + 10)), 16))
+        if (remaining >= 10) c = add32(c, ishft(byte_value(bytes(offset + 9)), 8))
         if (remaining >= 9) c = add32(c, byte_value(bytes(offset + 8)))
-        if (remaining >= 8) b = add32(b, shiftl(byte_value(bytes(offset + 7)), 24))
-        if (remaining >= 7) b = add32(b, shiftl(byte_value(bytes(offset + 6)), 16))
-        if (remaining >= 6) b = add32(b, shiftl(byte_value(bytes(offset + 5)), 8))
+        if (remaining >= 8) b = add32(b, ishft(byte_value(bytes(offset + 7)), 24))
+        if (remaining >= 7) b = add32(b, ishft(byte_value(bytes(offset + 6)), 16))
+        if (remaining >= 6) b = add32(b, ishft(byte_value(bytes(offset + 5)), 8))
         if (remaining >= 5) b = add32(b, byte_value(bytes(offset + 4)))
-        if (remaining >= 4) a = add32(a, shiftl(byte_value(bytes(offset + 3)), 24))
-        if (remaining >= 3) a = add32(a, shiftl(byte_value(bytes(offset + 2)), 16))
-        if (remaining >= 2) a = add32(a, shiftl(byte_value(bytes(offset + 1)), 8))
+        if (remaining >= 4) a = add32(a, ishft(byte_value(bytes(offset + 3)), 24))
+        if (remaining >= 3) a = add32(a, ishft(byte_value(bytes(offset + 2)), 16))
+        if (remaining >= 2) a = add32(a, ishft(byte_value(bytes(offset + 1)), 8))
         if (remaining >= 1) a = add32(a, byte_value(bytes(offset)))
         if (remaining > 0) call final_mix(a, b, c)
         checksum = int(c, int32)
@@ -74,8 +74,8 @@ contains
     pure integer(int64) function word32(bytes) result(value)
         integer(int8), intent(in) :: bytes(4)
 
-        value = byte_value(bytes(1)) + shiftl(byte_value(bytes(2)), 8) + &
-                shiftl(byte_value(bytes(3)), 16) + shiftl(byte_value(bytes(4)), 24)
+        value = byte_value(bytes(1)) + ishft(byte_value(bytes(2)), 8) + &
+                ishft(byte_value(bytes(3)), 16) + ishft(byte_value(bytes(4)), 24)
         value = wrap32(value)
     end function word32
 
@@ -107,7 +107,7 @@ contains
         integer(int64), intent(in) :: value_in
         integer, intent(in) :: count
 
-        value = iand(ior(shiftl(value_in, count), shiftr(value_in, 32 - count)), MASK32)
+        value = iand(ior(ishft(value_in, count), ishft(value_in, count - 32)), MASK32)
     end function rotate32
 
     pure integer(int64) function wrap32(value_in) result(value)

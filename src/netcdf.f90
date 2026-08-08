@@ -1371,7 +1371,7 @@ contains
 
         unsigned = iand(int(value, int64), int(z'ffffffff', int64))
         do i = 1, 4
-            bytes(i) = int(iand(shiftr(unsigned, 8*(4 - i)), 255_int64), int8)
+            bytes(i) = int(iand(ishft(unsigned, -8*(4 - i)), 255_int64), int8)
         end do
     end subroutine encode_be_i32
 
@@ -1381,7 +1381,7 @@ contains
         integer :: i
 
         do i = 1, 8
-            bytes(i) = int(iand(shiftr(value, 8*(8 - i)), 255_int64), int8)
+            bytes(i) = int(iand(ishft(value, -8*(8 - i)), 255_int64), int8)
         end do
     end subroutine encode_be_i64
 

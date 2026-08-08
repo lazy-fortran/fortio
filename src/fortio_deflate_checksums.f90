@@ -3,7 +3,7 @@ module fortio_deflate_checksums
 
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64
     implicit none
-    intrinsic :: ior, shiftl
+    intrinsic :: ior
 
     private
     public :: crc32_calculate
@@ -118,7 +118,7 @@ contains
             s2 = modulo(s2, 65521_int64)
         end do
 
-        adler32 = int(ior(shiftl(s2, 16), s1), int32)
+        adler32 = int(ior(ishft(s2, 16), s1), int32)
     end function calculate_adler32
 
 end module fortio_deflate_checksums

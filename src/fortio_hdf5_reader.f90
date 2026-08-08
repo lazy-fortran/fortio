@@ -349,7 +349,7 @@ contains
             else
                 position = 4 - i
             end if
-            bits = ior(bits, shiftl(iand(int(bytes(i), int64), 255_int64), &
+            bits = ior(bits, ishft(iand(int(bytes(i), int64), 255_int64), &
                 8*position))
         end do
         value = int(bits, int32)
@@ -1907,7 +1907,7 @@ contains
         do i = 1, width
             call reader%read_i8(byte, status)
             if (.not. status%ok()) return
-            value = ior(value, shiftl(int(byte_value(byte), int64), 8*(i - 1)))
+            value = ior(value, ishft(int(byte_value(byte), int64), 8*(i - 1)))
         end do
     end subroutine read_unsigned
 

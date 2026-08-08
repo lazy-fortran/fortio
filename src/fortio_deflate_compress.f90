@@ -101,9 +101,9 @@ contains
         output_data(3:block_size + 2) = compressed_block
         checksum = calculate_adler32(input_data, input_len)
         position = block_size + 3
-        output_data(position) = int(iand(shiftr(checksum, 24), 255), int8)
-        output_data(position + 1) = int(iand(shiftr(checksum, 16), 255), int8)
-        output_data(position + 2) = int(iand(shiftr(checksum, 8), 255), int8)
+        output_data(position) = int(iand(ishft(checksum, -24), 255), int8)
+        output_data(position + 1) = int(iand(ishft(checksum, -16), 255), int8)
+        output_data(position + 2) = int(iand(ishft(checksum, -8), 255), int8)
         output_data(position + 3) = int(iand(checksum, 255), int8)
     end subroutine zlib_compress_into
 

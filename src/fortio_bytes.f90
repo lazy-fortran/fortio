@@ -144,7 +144,7 @@ contains
         type(fortio_status_t), intent(inout) :: status
         integer(int8) :: bytes(2)
 
-        bytes(1) = int(iand(shiftr(value, 8), int(z'ff', int16)), int8)
+        bytes(1) = int(iand(ishft(value, -8), int(z'ff', int16)), int8)
         bytes(2) = int(iand(value, int(z'ff', int16)), int8)
         call this%write_bytes(bytes, status)
     end subroutine writer_write_be_i16
@@ -157,7 +157,7 @@ contains
         integer :: i
 
         do i = 1, 4
-            bytes(i) = int(iand(shiftr(value, 8*(4 - i)), int(z'ff', int32)), int8)
+            bytes(i) = int(iand(ishft(value, -8*(4 - i)), int(z'ff', int32)), int8)
         end do
         call this%write_bytes(bytes, status)
     end subroutine writer_write_be_i32
@@ -170,7 +170,7 @@ contains
         integer :: i
 
         do i = 1, 8
-            bytes(i) = int(iand(shiftr(value, 8*(8 - i)), int(z'ff', int64)), int8)
+            bytes(i) = int(iand(ishft(value, -8*(8 - i)), int(z'ff', int64)), int8)
         end do
         call this%write_bytes(bytes, status)
     end subroutine writer_write_be_i64
@@ -221,7 +221,7 @@ contains
         integer :: i
 
         do i = 1, 4
-            bytes(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int32)), int8)
+            bytes(i) = int(iand(ishft(value, -8*(i - 1)), int(z'ff', int32)), int8)
         end do
         call this%write_bytes(bytes, status)
     end subroutine writer_write_le_i32
@@ -234,7 +234,7 @@ contains
         integer :: i
 
         do i = 1, 8
-            bytes(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int64)), int8)
+            bytes(i) = int(iand(ishft(value, -8*(i - 1)), int(z'ff', int64)), int8)
         end do
         call this%write_bytes(bytes, status)
     end subroutine writer_write_le_i64
@@ -436,7 +436,7 @@ contains
         call this%read_bytes(bytes, status)
         if (.not. status%ok()) return
         value = int(ior(byte_value(bytes(1)), &
-            shiftl(byte_value(bytes(2)), 8)), int16)
+            ishft(byte_value(bytes(2)), 8)), int16)
     end subroutine reader_read_le_i16
 
     subroutine reader_read_le_i32(this, value, status)
@@ -450,7 +450,7 @@ contains
         if (.not. status%ok()) return
         value = 0_int32
         do i = 1, 4
-            value = ior(value, shiftl(byte_value(bytes(i)), 8*(i - 1)))
+            value = ior(value, ishft(byte_value(bytes(i)), 8*(i - 1)))
         end do
     end subroutine reader_read_le_i32
 
@@ -465,7 +465,7 @@ contains
         if (.not. status%ok()) return
         value = 0_int64
         do i = 1, 8
-            value = ior(value, shiftl(int(byte_value(bytes(i)), int64), 8*(i - 1)))
+            value = ior(value, ishft(int(byte_value(bytes(i)), int64), 8*(i - 1)))
         end do
     end subroutine reader_read_le_i64
 
@@ -528,7 +528,7 @@ contains
     pure integer(int16) function decode_be_i16(bytes)
         integer(int8), intent(in) :: bytes(2)
 
-        decode_be_i16 = int(ior(shiftl(byte_value(bytes(1)), 8), &
+        decode_be_i16 = int(ior(ishft(byte_value(bytes(1)), 8), &
             byte_value(bytes(2))), int16)
     end function decode_be_i16
 
@@ -539,7 +539,7 @@ contains
 
         result = 0_int32
         do i = 1, 4
-            result = ior(shiftl(result, 8), byte_value(bytes(i)))
+            result = ior(ishft(result, 8), byte_value(bytes(i)))
         end do
         decode_be_i32 = result
     end function decode_be_i32
@@ -551,7 +551,7 @@ contains
 
         result = 0_int64
         do i = 1, 8
-            result = ior(shiftl(result, 8), int(byte_value(bytes(i)), int64))
+            result = ior(ishft(result, 8), int(byte_value(bytes(i)), int64))
         end do
         decode_be_i64 = result
     end function decode_be_i64

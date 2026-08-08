@@ -1641,7 +1641,7 @@ contains
         integer, intent(in) :: value
 
         call append_values(bytes, [int(iand(value, 255), int8), &
-            int(iand(shiftr(value, 8), 255), int8)])
+            int(iand(ishft(value, -8), 255), int8)])
     end subroutine append_le16
 
     subroutine append_le32(bytes, value)
@@ -1651,7 +1651,7 @@ contains
         integer :: i
 
         do i = 1, 4
-            values(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int32)), int8)
+            values(i) = int(iand(ishft(value, -8*(i - 1)), int(z'ff', int32)), int8)
         end do
         call append_values(bytes, values)
     end subroutine append_le32
@@ -1663,7 +1663,7 @@ contains
         integer :: i
 
         do i = 1, 8
-            values(i) = int(iand(shiftr(value, 8*(i - 1)), int(z'ff', int64)), int8)
+            values(i) = int(iand(ishft(value, -8*(i - 1)), int(z'ff', int64)), int8)
         end do
         call append_values(bytes, values)
     end subroutine append_le64
@@ -1682,7 +1682,7 @@ contains
         integer :: i
 
         do i = 1, width
-            call append_u8(bytes, int(iand(shiftr(value, 8*(i - 1)), 255_int64)))
+            call append_u8(bytes, int(iand(ishft(value, -8*(i - 1)), 255_int64)))
         end do
     end subroutine append_unsigned
 
