@@ -341,7 +341,7 @@ contains
         dataset%name = leaf_name
         dataset%parent_group = parent_group
         dataset%type_code = TYPE_TEXT
-        dataset%dimensions = [integer(int64) ::]
+        allocate(dataset%dimensions(0))
         if (len_trim(value) == 0) then
             dataset%value_text = achar(0)
         else
