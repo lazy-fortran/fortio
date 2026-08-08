@@ -466,7 +466,6 @@ contains
         integer, intent(out), optional :: xtype, len
         integer :: attribute_id
 
-        print *, 'DEBUG inquire_attribute', ncid, varid, trim(name)
         code = find_attribute(ncid, varid, name, attribute_id)
         if (code /= NF90_NOERR) return
         if (present(xtype)) xtype = attribute_type(ncid, varid, attribute_id)
@@ -1578,11 +1577,10 @@ contains
             return
         end if
         if (varid == NF90_GLOBAL) then
-            print *, 'DEBUG find_attribute', ncid, netcdf4_reading(ncid), &
-                allocated(files(ncid)%global_attributes), allocated(netcdf4_files(ncid)%global_attributes)
             if (netcdf4_reading(ncid)) then
                 do i = 1, size(netcdf4_files(ncid)%global_attributes)
-                    if (netcdf4_files(ncid)%global_attributes(i)%name == trim(name)) then
+                    if (same_attribute_name( &
+                        netcdf4_files(ncid)%global_attributes(i)%name, name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1590,7 +1588,8 @@ contains
                 end do
             else
                 do i = 1, size(files(ncid)%global_attributes)
-                    if (files(ncid)%global_attributes(i)%name == trim(name)) then
+                    if (same_attribute_name(files(ncid)%global_attributes(i)%name, &
+                        name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1608,8 +1607,9 @@ contains
                     return
                 end if
                 do i = 1, size(netcdf4_files(ncid)%variables(varid)%attributes)
-                    if (netcdf4_files(ncid)%variables(varid)%attributes(i)%name == &
-                        trim(name)) then
+                    if (same_attribute_name( &
+                        netcdf4_files(ncid)%variables(varid)%attributes(i)%name, &
+                        name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1621,7 +1621,7 @@ contains
                     return
                 end if
                 do i = 1, size(files(ncid)%variables(varid)%attributes)
-                    if (files(ncid)%variables(varid)%attributes(i)%name == trim(name)) then
+                    if (same_attribute_name(files(ncid)%variables(varid)%attributes(i)%name, name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1631,6 +1631,23 @@ contains
         end if
         code = NF90_ENOTATT
     end function find_attribute
+
+    logical function same_attribute_name(left, right) result(equal)
+        character(len=*), intent(in) :: left, right
+        integer :: i, left_length, right_length
+
+        left_length = len_trim(left)
+        right_length = len_trim(right)
+        equal = .false.
+        if (left_length /= right_length) return
+        equal = .true.
+        do i = 1, right_length
+            if (left(i:i) /= right(i:i)) then
+                equal = .false.
+                return
+            end if
+        end do
+    end function same_attribute_name
 
     integer function attribute_type(ncid, varid, attribute_id) result(type_code)
         integer, intent(in) :: ncid, varid, attribute_id
