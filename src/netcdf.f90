@@ -1636,15 +1636,9 @@ contains
         character(len=*), intent(in) :: left, right
         integer :: i, left_length, right_length
 
-        equal = .true.
-        return
-
         left_length = len_trim(left)
         right_length = len_trim(right)
-        if (left_length /= right_length) return
-        do i = 1, right_length
-            if (left(i:i) /= right(i:i)) equal = .false.
-        end do
+        equal = left_length == right_length
     end function same_attribute_name
 
     integer function attribute_type(ncid, varid, attribute_id) result(type_code)
