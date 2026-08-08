@@ -1577,6 +1577,8 @@ contains
             return
         end if
         if (varid == NF90_GLOBAL) then
+            print *, 'DEBUG find_attribute', ncid, netcdf4_reading(ncid), &
+                allocated(files(ncid)%global_attributes), allocated(netcdf4_files(ncid)%global_attributes)
             if (netcdf4_reading(ncid)) then
                 do i = 1, size(netcdf4_files(ncid)%global_attributes)
                     if (netcdf4_files(ncid)%global_attributes(i)%name == trim(name)) then
