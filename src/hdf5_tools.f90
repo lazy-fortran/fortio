@@ -618,12 +618,36 @@ contains
         integer, intent(out) :: value
         type(fortio_status_t) :: status
         integer(int32) :: temporary
-        integer :: slot
+        integer(int32), allocatable :: temporary_vector(:)
+        integer(int64), allocatable :: dimensions(:)
+        logical :: is_group
+        integer :: element_size, slot, type_class
+        character(len=:), allocatable :: path
 
         slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        path = joined_path(slot, dataset)
+        call files(root_slot(slot))%describe(path, is_group, type_class, dimensions, &
+                                              status, element_size)
         call require_ok(status)
-        value = int(temporary, kind(value))
+        if (is_group) error stop "HDF5 integer scalar read found a group"
+        select case (size(dimensions))
+        case (0)
+            ! Native HDF5 scalar dataspace.
+            call files(root_slot(slot))%read(path, temporary, status)
+            call require_ok(status)
+            value = int(temporary, kind(value))
+        case (1)
+            ! The pre-Fortio hdf5_tools writer represented legacy scalar
+            ! values as a rank-1 dataset with one element.  Keep accepting
+            ! that valid HDF5 representation through the scalar adapter.
+            if (dimensions(1) /= 1_int64) &
+                error stop "HDF5 integer scalar read found a non-unit vector"
+            call files(root_slot(slot))%read(path, temporary_vector, status)
+            call require_ok(status)
+            value = int(temporary_vector(1), kind(value))
+        case default
+            error stop "HDF5 integer scalar read found a non-scalar dataset"
+        end select
     end subroutine h5_get_int
 
     subroutine h5_get_int_1(h5id, dataset, value)

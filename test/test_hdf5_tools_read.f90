@@ -30,6 +30,8 @@ program test_hdf5_tools_read
     call h5_init()
     call h5_open(trim(fixture), file_id)
     call h5_get(file_id, "grid/Nt", scalar)
+    call h5_get(file_id, "grid/Nt_vector", scalar)
+    if (scalar /= 42) error stop "hdf5_tools legacy one-element scalar differs"
     call h5_get(file_id, "grid/x_values", x)
     call h5_get(file_id, "grid/matrix", matrix)
     call h5ltget_dataset_info_f(file_id, "grid/matrix", dimensions, type_class, &
