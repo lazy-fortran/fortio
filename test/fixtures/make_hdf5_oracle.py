@@ -10,6 +10,10 @@ with h5py.File(sys.argv[1], "w", libver="latest", track_order=True) as handle:
     handle.attrs["torflux"] = np.float64(-803450571.635625)
     grid = handle.create_group("grid")
     grid.create_dataset("Nt", data=np.int32(42))
+    # Legacy hdf5_tools represented scalar integer metadata as a one-element
+    # rank-1 dataset.  It is distinct from the rank-0 scalar above but must
+    # remain readable through the scalar compatibility adapter.
+    grid.create_dataset("Nt_vector", data=np.array([42], dtype=np.int32))
     grid.create_dataset(
         "x_values",
         data=np.array([1.25, -2.5, 4.75], dtype=np.float32),
