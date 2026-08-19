@@ -38,6 +38,10 @@ uses a concurrency group so a newer pull request revision cancels obsolete
 downstream runs. A downstream workflow must make its candidate ref part of the
 build command and must keep the ref in its build log.
 
+The gate also supports manual and release-time verification. Run
+`gh workflow run downstream-gate.yml -f fortio_ref=<commit>`; if `fortio_ref`
+is omitted, the selected Fortio branch commit is tested.
+
 The registry does not replace package manifests or lock files. CMake users
 should pin `FetchContent` Git dependencies to full commit IDs. FPM users should
 pin the same release commit in `fpm.toml`. A released Fortio commit is promoted
