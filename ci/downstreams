@@ -17,7 +17,7 @@
 itpplasma/libneo main.yml direct fortio_ref yes no
 itpplasma/NEO-2 unit-tests.yml delegated libneo_ref no no
 itpplasma/NEO-RT test.yml delegated libneo_ref no no
-itpplasma/SIMPLE main.yml delegated - no no
+itpplasma/SIMPLE main.yml delegated libneo_ref no no
 itpplasma/MEPHIT main.yml delegated libneo_ref no no
 itpplasma/KAMEL ci.yml delegated libneo_ref no no
 itpplasma/rabe test.yml delegated libneo_ref no no

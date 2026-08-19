@@ -16,11 +16,9 @@ candidate SHA from a fork is not available from the upstream repository under
 the downstream's normal fetch permissions.
 
 NEO-2, NEO-RT, SIMPLE, MEPHIT, KAMEL, and rabe are recorded as delegated
-consumers. They reach Fortio through libneo. libneo owns the direct candidate
-injection and its reverse-dependency gate. NEO-2 and NEO-RT expose
-`libneo_ref` for their own downstream testing. SIMPLE's current workflow does
-not expose a candidate-ref input, so it remains visible in the registry until
-that edge can be tested directly.
+consumers. They reach Fortio through libneo, which owns candidate injection
+and its reverse-dependency gate. rabe's direct `fortio_ref` gate becomes
+blocking after its protected downstream change is reviewed and merged.
 
 ## Adding a consumer
 
@@ -49,4 +47,6 @@ updated.
 This workflow uses GitHub's `workflow_dispatch` event and the Actions API's
 explicit repository permissions. The design follows CMake's guidance to use a
 commit hash for `FetchContent` Git content and GitHub's guidance for explicit
-workflow permissions and reproducible action references.
+workflow permissions and reproducible action references. Fortio pins actions
+to full commit IDs; Dependabot proposes weekly GitHub Actions updates so those
+immutable references do not silently become stale.
