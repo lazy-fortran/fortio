@@ -13,13 +13,13 @@ jobs:
   downstream-registry:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: python3 ci/check_downstreams.py
 
   gfortran:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install compiler and independent format oracles
         run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
       - uses: fortran-lang/setup-fpm@v7
@@ -31,7 +31,7 @@ jobs:
   cmake:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install compiler and independent format oracles
         run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
       - name: Configure
@@ -51,7 +51,7 @@ jobs:
   native-performance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install compiler and native comparison libraries
         run: >
           sudo apt-get update &&
@@ -89,7 +89,7 @@ jobs:
   thread-sanitizer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install compiler and independent format oracles
         run: >
           sudo apt-get update &&
@@ -111,7 +111,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install GNU Fortran
         uses: msys2/setup-msys2@v2
         with:
