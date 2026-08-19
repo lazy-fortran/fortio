@@ -203,6 +203,12 @@ if(FORTIO_BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/oracle.h5"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_oracle.py")
 
+    add_executable(test_hdf5_legacy_neo2 test/test_hdf5_legacy_neo2.f90)
+    target_link_libraries(test_hdf5_legacy_neo2 PRIVATE fortio)
+    add_test(NAME hdf5_legacy_neo2 COMMAND test_hdf5_legacy_neo2
+        "${CMAKE_CURRENT_BINARY_DIR}/legacy-neo2.h5"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_legacy_neo2.py")
+
     add_executable(test_hdf5_tools_read test/test_hdf5_tools_read.f90)
     target_link_libraries(test_hdf5_tools_read PRIVATE fortio)
     add_test(NAME hdf5_tools_read COMMAND test_hdf5_tools_read

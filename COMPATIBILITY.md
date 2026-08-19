@@ -21,7 +21,11 @@ HDF5 Fortran API. It includes typed `h5_add`/`h5_get`, groups, attributes,
 Fortran bounds, hyperslabs, unlimited datasets, append, copy, and delete.
 MEPHIT's sole direct HDF5-Lite call is provided by the `h5lt` compatibility
 module as `h5ltget_dataset_info_f`.
-Input fixtures used by the pinned codes are contiguous. Filtered input accepts
+Input fixtures used by the pinned codes are contiguous. Legacy HDF5 input with
+superblock version 0, version-1 object headers, symbol-table groups, and
+contiguous datasets is also readable. Legacy one-element rank-1 integer
+datasets are accepted by scalar reads. Unsupported variable-length attributes
+are skipped while the containing datasets remain readable. Filtered input accepts
 the single-chunk NetCDF-4 layout emitted by Fortio and by the system
 NetCDF/HDF5 oracle. Multi-chunk indexes are deliberately not implemented.
 

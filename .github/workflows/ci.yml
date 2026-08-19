@@ -10,6 +10,12 @@ permissions:
   contents: read
 
 jobs:
+  downstream-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 ci/check_downstreams.py
+
   gfortran:
     runs-on: ubuntu-latest
     steps:

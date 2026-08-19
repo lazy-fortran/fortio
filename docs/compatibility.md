@@ -16,6 +16,8 @@ an error; they must not silently degrade the file.
 | NetCDF CDF-2 | yes | yes | 64-bit offsets |
 | NetCDF-4/HDF5 | yes | yes | Required HDF5 subset |
 | HDF5 contiguous datasets | yes | yes | Required numeric and text types |
+| HDF5 superblock 0 input | yes | no | Legacy object headers and symbol-table groups |
+| Legacy one-element integer scalars | yes | no | Rank-1 length-one datasets read as scalars |
 | HDF5 single-chunk datasets | yes | yes | Shuffle and Deflate supported |
 | General HDF5 chunk indexes | no | no | Multi-chunk indexes are not implemented |
 | CDF-5 | no | no | No downstream requirement |
@@ -39,6 +41,11 @@ The ITP `hdf5_tools` surface supports the required typed `h5_add` and `h5_get`
 operations, groups, attributes, Fortran bounds, hyperslabs, unlimited
 datasets, append, copy, replacement, and deletion. MEPHIT's required
 `h5ltget_dataset_info_f` call is supplied by the `h5lt` module.
+
+Legacy superblock-0 files use version-1 object headers and symbol-table
+groups. Fortio reads their numeric contiguous datasets and ignores unsupported
+variable-length attributes such as the `unit` attributes produced by the
+supplier NEO-2 files. The values and shapes remain available to the reader.
 
 The underlying HDF5 engine additionally exposes object description, child
 listing, existence checks, 64-bit integer arrays, and the complex array ranks

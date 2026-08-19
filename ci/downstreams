@@ -1,0 +1,23 @@
+# Known Fortio users and the owner of their compatibility gate.
+#
+# Columns: <repo> <workflow> <mode> <input> <blocking> <full>
+#   repo      GitHub repository in owner/name form.
+#   workflow  workflow file on the repository's default branch.
+#   mode      direct = this workflow can test a Fortio candidate directly;
+#             delegated = a downstream of libneo, whose gate owns the test.
+#   input     workflow_dispatch input used by the gate, or '-' when the
+#             downstream has no candidate-ref override.
+#   blocking  whether a failed direct gate blocks the Fortio pull request.
+#   full      reserved for a separately dispatched slow suite.
+#
+# Direct users are dispatched by .github/workflows/downstream-gate.yml.
+# Delegated users remain in this registry so new consumers are visible and so
+# their compatibility owner is explicit. Update this file when a dependency
+# edge or its candidate-ref input changes.
+itpplasma/libneo main.yml direct fortio_ref yes no
+itpplasma/NEO-2 unit-tests.yml delegated libneo_ref no no
+itpplasma/NEO-RT test.yml delegated libneo_ref no no
+itpplasma/SIMPLE main.yml delegated - no no
+itpplasma/MEPHIT main.yml delegated libneo_ref no no
+itpplasma/KAMEL ci.yml delegated libneo_ref no no
+itpplasma/rabe test.yml delegated libneo_ref no no

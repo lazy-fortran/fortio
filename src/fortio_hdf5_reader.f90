@@ -15,6 +15,7 @@ module fortio_hdf5_reader
     integer, parameter :: H5_MSG_FILTER_PIPELINE = 11
     integer, parameter :: H5_MSG_ATTRIBUTE = 12
     integer, parameter :: H5_MSG_CONTINUATION = 16
+    integer, parameter :: H5_MSG_SYMBOL_TABLE = 17
     integer, parameter :: H5_MSG_ATTRIBUTE_INFO = 21
     integer, parameter :: H5_TYPE_INTEGER = 0
     integer, parameter :: H5_TYPE_FLOAT = 1
@@ -51,10 +52,13 @@ module fortio_hdf5_reader
 
     type, public :: hdf5_file_t
         type(byte_reader_t) :: reader
+        integer :: superblock_version = -1
         integer :: offset_size = 0
         integer :: length_size = 0
         integer(int64) :: base_address = 0_int64
         integer(int64) :: root_address = -1_int64
+        integer(int64) :: root_btree_address = -1_int64
+        integer(int64) :: root_heap_address = -1_int64
         character(len=:), allocatable :: cached_dataset_path
         type(hdf5_dataset_t) :: cached_dataset
         logical :: opened = .false.
@@ -167,8 +171,9 @@ contains
         character(len=*), intent(in) :: path
         type(fortio_status_t), intent(inout) :: status
         integer(int8) :: signature(8), version_byte, size_byte
-        integer(int32) :: ignored_flags
-        integer(int64) :: ignored_address
+        integer(int16) :: ignored_k
+        integer(int32) :: ignored_flags, cache_type
+        integer(int64) :: ignored_address, name_offset
 
         if (allocated(this%cached_dataset_path)) deallocate(this%cached_dataset_path)
         call this%reader%open(path, status)
@@ -181,7 +186,39 @@ contains
         end if
         call this%reader%read_i8(version_byte, status)
         if (.not. status%ok()) return
-        if (byte_value(version_byte) /= 2 .and. byte_value(version_byte) /= 3) then
+        this%superblock_version = byte_value(version_byte)
+        if (this%superblock_version == 0) then
+            ! Version-0 superblocks keep the root group in the old symbol-table
+            ! format. The four version/reserved bytes precede the offset sizes.
+            call skip_bytes(this%reader, 4_int64)
+            call this%reader%read_i8(size_byte, status)
+            this%offset_size = byte_value(size_byte)
+            call this%reader%read_i8(size_byte, status)
+            this%length_size = byte_value(size_byte)
+            call skip_bytes(this%reader, 1_int64)
+            call this%reader%read_le_i16(ignored_k, status)
+            call this%reader%read_le_i16(ignored_k, status)
+            call this%reader%read_le_i32(ignored_flags, status)
+            if (this%offset_size /= 8 .or. this%length_size /= 8) then
+                call status%set(FORTIO_ENOTSUP, &
+                    "only 64-bit HDF5 offsets and lengths are supported")
+                return
+            end if
+            call read_unsigned(this%reader, this%offset_size, this%base_address, status)
+            call read_unsigned(this%reader, this%offset_size, ignored_address, status)
+            call read_unsigned(this%reader, this%offset_size, ignored_address, status)
+            call read_unsigned(this%reader, this%offset_size, ignored_address, status)
+            call read_unsigned(this%reader, this%offset_size, name_offset, status)
+            call read_unsigned(this%reader, this%offset_size, this%root_address, status)
+            call this%reader%read_le_i32(cache_type, status)
+            call skip_bytes(this%reader, 4_int64)
+            call read_unsigned(this%reader, this%offset_size, this%root_btree_address, status)
+            call read_unsigned(this%reader, this%offset_size, this%root_heap_address, status)
+            if (.not. status%ok()) return
+            this%opened = .true.
+            return
+        end if
+        if (this%superblock_version /= 2 .and. this%superblock_version /= 3) then
             call status%set(FORTIO_ENOTSUP, "HDF5 superblock version is not supported")
             return
         end if
@@ -200,6 +237,8 @@ contains
         call this%reader%read_le_i64(ignored_address, status)
         call this%reader%read_le_i64(this%root_address, status)
         if (.not. status%ok()) return
+        this%root_btree_address = -1_int64
+        this%root_heap_address = -1_int64
         this%opened = .true.
     end subroutine hdf5_open
 
@@ -1031,6 +1070,10 @@ contains
         call this%reader%seek(this%base_address + address + 1)
         call this%reader%read_bytes(signature, status)
         if (.not. status%ok()) return
+        if (byte_value(signature(1)) == 1) then
+            call parse_legacy_object_header(this, address, links, dataset, want_links, status)
+            return
+        end if
         if (bytes_text(signature) /= "OHDR") then
             call status%set(FORTIO_ENOTSUP, "only HDF5 v2 object headers are supported")
             return
@@ -1056,6 +1099,208 @@ contains
         call parse_message_chunk(this, chunk_start, chunk_size, links, dataset, &
             want_links, flags, status)
     end subroutine parse_object_header
+
+    subroutine parse_legacy_object_header(this, address, links, dataset, want_links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: address
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        logical, intent(in) :: want_links
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: version_byte, reserved_byte
+        integer(int16) :: message_count_i16, message_type_i16, message_size_i16
+        integer(int32) :: reference_count, chunk_size_i32, message_flags
+        integer(int64) :: chunk_start, chunk_end, data_start, next_message
+        integer(int64) :: btree_address, heap_address
+
+        btree_address = -1_int64
+        heap_address = -1_int64
+        call this%reader%seek(this%base_address + address + 1)
+        call this%reader%read_i8(version_byte, status)
+        call this%reader%read_i8(reserved_byte, status)
+        call this%reader%read_le_i16(message_count_i16, status)
+        call this%reader%read_le_i32(reference_count, status)
+        call this%reader%read_le_i32(chunk_size_i32, status)
+        call this%reader%read_le_i32(message_flags, status)
+        if (.not. status%ok()) return
+        if (byte_value(version_byte) /= 1) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 legacy object header version is not supported")
+            return
+        end if
+        if (chunk_size_i32 < 16) then
+            call status%set(FORTIO_EFORMAT, "invalid HDF5 legacy object header size")
+            return
+        end if
+        chunk_start = this%reader%position
+        chunk_end = chunk_start + int(chunk_size_i32, int64) - 16_int64
+        do while (this%reader%position + 8_int64 <= chunk_end)
+            call this%reader%read_le_i16(message_type_i16, status)
+            call this%reader%read_le_i16(message_size_i16, status)
+            call this%reader%read_le_i32(message_flags, status)
+            if (.not. status%ok()) return
+            data_start = this%reader%position
+            next_message = data_start + int(message_size_i16, int64)
+            if (message_type_i16 == 0) exit
+            select case (int(message_type_i16))
+            case (H5_MSG_SYMBOL_TABLE)
+                if (want_links) then
+                    call read_unsigned(this%reader, this%offset_size, btree_address, status)
+                    call read_unsigned(this%reader, this%offset_size, heap_address, status)
+                end if
+            case (H5_MSG_DATASPACE)
+                if (.not. want_links) call parse_dataspace_message(this, dataset, status)
+            case (3)
+                if (.not. want_links) call parse_datatype_message(this, dataset, status)
+            case (H5_MSG_LAYOUT)
+                if (.not. want_links) call parse_layout_message(this, dataset, status)
+            case (H5_MSG_ATTRIBUTE)
+                if (.not. want_links) call parse_attribute_message(this, dataset, status)
+            end select
+            if (.not. status%ok()) return
+            call this%reader%seek(next_message)
+        end do
+        if (want_links) then
+            if (btree_address < 0 .or. heap_address < 0) then
+                call status%set(FORTIO_EFORMAT, "HDF5 legacy group lacks a symbol table")
+                return
+            end if
+            call parse_legacy_symbol_table(this, btree_address, heap_address, links, status)
+        end if
+    end subroutine parse_legacy_object_header
+
+    subroutine parse_legacy_symbol_table(this, btree_address, heap_address, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: btree_address, heap_address
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), node_type, level
+        integer(int16) :: entry_count_i16
+        integer(int64) :: ignored_key, child_address, entry_end
+        integer :: i, entry_count
+
+        call this%reader%seek(this%base_address + btree_address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(node_type, status)
+        call this%reader%read_i8(level, status)
+        call this%reader%read_le_i16(entry_count_i16, status)
+        if (.not. status%ok()) return
+        if (bytes_text(signature) /= "TREE" .or. byte_value(node_type) /= 0 .or. &
+            byte_value(level) /= 0) then
+            call status%set(FORTIO_ENOTSUP, &
+                "only level-zero HDF5 legacy symbol tables are supported")
+            return
+        end if
+        entry_count = int(entry_count_i16)
+        call skip_bytes(this%reader, 2_int64*this%offset_size)
+        do i = 1, entry_count
+            call read_unsigned(this%reader, this%offset_size, ignored_key, status)
+            call read_unsigned(this%reader, this%offset_size, child_address, status)
+            if (.not. status%ok()) return
+            if (child_address < 0) cycle
+            entry_end = this%reader%position
+            call parse_legacy_symbol_node(this, child_address, heap_address, links, status)
+            if (.not. status%ok()) return
+            call this%reader%seek(entry_end)
+        end do
+    end subroutine parse_legacy_symbol_table
+
+    subroutine parse_legacy_symbol_node(this, address, heap_address, links, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: address, heap_address
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), version_byte, reserved_byte
+        integer(int16) :: entry_count_i16
+        integer(int64) :: name_offset, object_address, entry_end
+        character(len=:), allocatable :: name
+        integer :: i, entry_count
+
+        call this%reader%seek(this%base_address + address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(version_byte, status)
+        call this%reader%read_i8(reserved_byte, status)
+        call this%reader%read_le_i16(entry_count_i16, status)
+        if (.not. status%ok()) return
+        if (bytes_text(signature) /= "SNOD" .or. byte_value(version_byte) /= 1) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 legacy symbol node version is not supported")
+            return
+        end if
+        entry_count = int(entry_count_i16)
+        do i = 1, entry_count
+            call read_unsigned(this%reader, this%offset_size, name_offset, status)
+            call read_unsigned(this%reader, this%offset_size, object_address, status)
+            call skip_bytes(this%reader, 24_int64)
+            if (.not. status%ok()) return
+            entry_end = this%reader%position
+            call read_legacy_heap_string(this, heap_address, name_offset, name, status)
+            if (.not. status%ok()) return
+            call append_link(links, name, object_address)
+            call this%reader%seek(entry_end)
+        end do
+    end subroutine parse_legacy_symbol_node
+
+    subroutine read_legacy_heap_string(this, heap_address, name_offset, name, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: heap_address, name_offset
+        character(len=:), allocatable, intent(out) :: name
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: signature(4), version_byte, reserved_byte, byte
+        integer(int64) :: data_address, data_size, free_list_address
+        integer :: i, length
+
+        call this%reader%seek(this%base_address + heap_address + 1)
+        call this%reader%read_bytes(signature, status)
+        call this%reader%read_i8(version_byte, status)
+        call this%reader%read_i8(reserved_byte, status)
+        call skip_bytes(this%reader, 2_int64)
+        call read_unsigned(this%reader, this%length_size, data_size, status)
+        call read_unsigned(this%reader, this%offset_size, free_list_address, status)
+        call read_unsigned(this%reader, this%offset_size, data_address, status)
+        if (.not. status%ok()) return
+        if (bytes_text(signature) /= "HEAP" .or. byte_value(version_byte) /= 0) then
+            call status%set(FORTIO_ENOTSUP, "HDF5 legacy local heap version is not supported")
+            return
+        end if
+        if (name_offset < 0 .or. name_offset >= data_size) then
+            call status%set(FORTIO_EFORMAT, "HDF5 legacy link name is outside the local heap")
+            return
+        end if
+        call this%reader%seek(this%base_address + data_address + name_offset + 1)
+        length = 0
+        do while (int(name_offset, int64) + length < data_size)
+            call this%reader%read_i8(byte, status)
+            if (.not. status%ok()) return
+            if (byte_value(byte) == 0) exit
+            length = length + 1
+        end do
+        if (int(name_offset, int64) + length >= data_size .and. byte_value(byte) /= 0) then
+            call status%set(FORTIO_EFORMAT, "unterminated HDF5 legacy link name")
+            return
+        end if
+        allocate(character(len=length) :: name)
+        if (length == 0) return
+        call this%reader%seek(this%base_address + data_address + name_offset + 1)
+        do i = 1, length
+            call this%reader%read_i8(byte, status)
+            if (.not. status%ok()) return
+            name(i:i) = achar(byte_value(byte))
+        end do
+    end subroutine read_legacy_heap_string
+
+    subroutine append_link(links, name, address)
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        character(len=*), intent(in) :: name
+        integer(int64), intent(in) :: address
+        type(hdf5_link_t), allocatable :: temporary(:)
+        integer :: count
+
+        count = size(links)
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = links
+        temporary(count + 1)%name = name
+        temporary(count + 1)%address = address
+        call move_alloc(temporary, links)
+    end subroutine append_link
 
     recursive subroutine parse_message_chunk(this, start, length, links, dataset, &
             want_links, header_flags, status)
@@ -1544,6 +1789,21 @@ contains
         call this%reader%read_i8(flags_byte, status)
         call this%reader%read_i8(type_byte, status)
         if (.not. status%ok()) return
+        if (byte_value(version_byte) == 1) then
+            if (byte_value(rank_byte) == 0 .and. btest(byte_value(flags_byte), 0)) then
+                call status%set(FORTIO_EFORMAT, "invalid scalar HDF5 dataspace")
+                return
+            end if
+            call skip_bytes(this%reader, 4_int64)
+            allocate(dataset%dimensions(byte_value(rank_byte)))
+            do i = 1, size(dataset%dimensions)
+                call read_unsigned(this%reader, this%length_size, dataset%dimensions(i), status)
+            end do
+            flags = byte_value(flags_byte)
+            if (btest(flags, 0)) call skip_bytes(this%reader, &
+                int(this%length_size, int64)*size(dataset%dimensions))
+            return
+        end if
         if (byte_value(version_byte) /= 2 .or. byte_value(type_byte) > 1) then
             call status%set(FORTIO_ENOTSUP, "HDF5 dataspace form is not supported")
             return
