@@ -1111,7 +1111,8 @@ contains
         integer(int16) :: message_count_i16, message_type_i16, message_size_i16
         integer(int32) :: reference_count, chunk_size_i32, message_flags
         integer(int64) :: chunk_start, chunk_end, data_start, next_message
-        integer(int64) :: btree_address, heap_address
+        integer(int64) :: btree_address, heap_address, continuation_address, &
+            continuation_size
 
         btree_address = -1_int64
         heap_address = -1_int64
@@ -1140,7 +1141,10 @@ contains
             if (.not. status%ok()) return
             data_start = this%reader%position
             next_message = data_start + int(message_size_i16, int64)
-            if (message_type_i16 == 0) exit
+            if (message_type_i16 == 0) then
+                call this%reader%seek(next_message)
+                cycle
+            end if
             select case (int(message_type_i16))
             case (H5_MSG_SYMBOL_TABLE)
                 if (want_links) then
@@ -1155,6 +1159,11 @@ contains
                 if (.not. want_links) call parse_layout_message(this, dataset, status)
             case (H5_MSG_ATTRIBUTE)
                 if (.not. want_links) call parse_attribute_message(this, dataset, status)
+            case (H5_MSG_CONTINUATION)
+                call read_unsigned(this%reader, this%offset_size, continuation_address, status)
+                call read_unsigned(this%reader, this%length_size, continuation_size, status)
+                if (status%ok()) call parse_legacy_message_chunk(this, continuation_address, &
+                    continuation_size, links, dataset, want_links, btree_address, heap_address, status)
             end select
             if (.not. status%ok()) return
             call this%reader%seek(next_message)
@@ -1167,6 +1176,63 @@ contains
             call parse_legacy_symbol_table(this, btree_address, heap_address, links, status)
         end if
     end subroutine parse_legacy_object_header
+
+    recursive subroutine parse_legacy_message_chunk(this, address, length, links, dataset, &
+            want_links, btree_address, heap_address, status)
+        class(hdf5_file_t), intent(inout) :: this
+        integer(int64), intent(in) :: address, length
+        type(hdf5_link_t), allocatable, intent(inout) :: links(:)
+        type(hdf5_dataset_t), intent(inout) :: dataset
+        logical, intent(in) :: want_links
+        integer(int64), intent(inout) :: btree_address, heap_address
+        type(fortio_status_t), intent(inout) :: status
+        integer(int16) :: message_type_i16, message_size_i16
+        integer(int32) :: message_flags
+        integer(int64) :: chunk_start, chunk_end, data_start, next_message, &
+            continuation_address, continuation_size
+
+        chunk_start = this%base_address + address + 1_int64
+        chunk_end = chunk_start + length
+        call this%reader%seek(chunk_start)
+        do while (this%reader%position + 8_int64 <= chunk_end)
+            call this%reader%read_le_i16(message_type_i16, status)
+            call this%reader%read_le_i16(message_size_i16, status)
+            call this%reader%read_le_i32(message_flags, status)
+            if (.not. status%ok()) return
+            data_start = this%reader%position
+            next_message = data_start + int(message_size_i16, int64)
+            ! Continuation chunks may reserve the first message slot for a
+            ! chained continuation and leave a null padding message before
+            ! the actual payload.  Unlike the primary chunk, a null here does
+            ! not terminate the chunk.
+            if (message_type_i16 == 0) then
+                call this%reader%seek(next_message)
+                cycle
+            end if
+            select case (int(message_type_i16))
+            case (H5_MSG_SYMBOL_TABLE)
+                if (want_links) then
+                    call read_unsigned(this%reader, this%offset_size, btree_address, status)
+                    call read_unsigned(this%reader, this%offset_size, heap_address, status)
+                end if
+            case (H5_MSG_DATASPACE)
+                if (.not. want_links) call parse_dataspace_message(this, dataset, status)
+            case (3)
+                if (.not. want_links) call parse_datatype_message(this, dataset, status)
+            case (H5_MSG_LAYOUT)
+                if (.not. want_links) call parse_layout_message(this, dataset, status)
+            case (H5_MSG_ATTRIBUTE)
+                if (.not. want_links) call parse_attribute_message(this, dataset, status)
+            case (H5_MSG_CONTINUATION)
+                call read_unsigned(this%reader, this%offset_size, continuation_address, status)
+                call read_unsigned(this%reader, this%length_size, continuation_size, status)
+                if (status%ok()) call parse_legacy_message_chunk(this, continuation_address, &
+                    continuation_size, links, dataset, want_links, btree_address, heap_address, status)
+            end select
+            if (.not. status%ok()) return
+            call this%reader%seek(next_message)
+        end do
+    end subroutine parse_legacy_message_chunk
 
     subroutine parse_legacy_symbol_table(this, btree_address, heap_address, links, status)
         class(hdf5_file_t), intent(inout) :: this

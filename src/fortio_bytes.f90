@@ -333,7 +333,8 @@ contains
         bytes_read = mapped_copy(this%mapping, c_loc(values), int(byte_count, c_size_t), &
             int(this%position - 1_int64, c_int64_t))
         if (bytes_read /= byte_count) then
-            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data at position " // &
+                int_to_text(this%position) // " for " // int_to_text(byte_count) // " bytes")
             return
         end if
         this%position = this%position + int(byte_count, int64)
@@ -421,11 +422,21 @@ contains
                 int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
         end if
         if (bytes_read /= byte_count) then
-            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data at position " // &
+                int_to_text(this%position) // " for " // int_to_text(byte_count) // " bytes")
             return
         end if
         this%position = this%position + int(byte_count, int64)
     end subroutine reader_read_be_r64_array
+
+    function int_to_text(value) result(text)
+        integer(int64), intent(in) :: value
+        character(len=:), allocatable :: text
+        character(len=32) :: buffer
+
+        write (buffer, '(i0)') value
+        text = trim(buffer)
+    end function int_to_text
 
     subroutine reader_read_le_i16(this, value, status)
         class(byte_reader_t), intent(inout) :: this
