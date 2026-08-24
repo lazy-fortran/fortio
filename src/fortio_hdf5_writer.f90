@@ -102,6 +102,8 @@ module fortio_hdf5_writer
         procedure :: set_deflate => hdf5_set_deflate
         procedure :: remove_dataset => hdf5_remove_dataset
         procedure :: object_exists => hdf5_object_exists
+        procedure :: suspend => hdf5_writer_suspend
+        procedure :: flush => hdf5_writer_flush
         procedure :: close => hdf5_writer_close
         final :: finalize_hdf5_writer
     end type hdf5_writer_t
@@ -183,6 +185,29 @@ contains
         end if
         this%opened = .true.
     end subroutine hdf5_writer_reopen
+
+    subroutine hdf5_writer_suspend(this, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        ! Keep the complete image in memory for a same-process reopen.  The
+        ! compatibility layer uses this only when it explicitly defers the
+        ! close flush until h5_deinit; ordinary close semantics are unchanged.
+        this%opened = .false.
+    end subroutine hdf5_writer_suspend
+
+    subroutine hdf5_writer_flush(this, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        type(fortio_status_t), intent(inout) :: status
+        logical :: was_opened
+
+        call status%clear()
+        was_opened = this%opened
+        this%opened = .true.
+        call hdf5_writer_close(this, status)
+        if (was_opened .and. .not. status%ok()) this%opened = .true.
+    end subroutine hdf5_writer_flush
 
     subroutine hdf5_add_i32_scalar(this, name, value, status)
         class(hdf5_writer_t), intent(inout) :: this

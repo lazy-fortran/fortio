@@ -5,6 +5,7 @@ program test_hdf5_tools_write
         h5_open, h5_open_group, h5overwrite, h5_delete, &
         h5_define_unlimited_array, h5_define_unlimited_matrix, h5_append_double_1, &
         h5_exists, h5_open_rw, h5_copy, h5_add_float_1, h5_init, h5_deinit
+    use hdf5_tools, only: h5_defer_close
     use hdf5_tools_f2003, only: H5T_NATIVE_DOUBLE, H5T_NATIVE_INTEGER
     implicit none
 
@@ -27,6 +28,7 @@ program test_hdf5_tools_write
     logical :: found_string, found_complex
     logical :: found_stream_matrix, found_stream_matrix_values
     logical :: found_float32, found_preserved_float, found_updated_attribute
+    logical :: deferred_exists
 
     call get_command_argument(1, path)
     if (len_trim(path) == 0) path = "build/hdf5-tools-written.h5"
@@ -229,5 +231,30 @@ program test_hdf5_tools_write
     command = "h5dump -d before_reopen "//trim(path)//".reopen | grep -q '(0): 11'"
     call execute_command_line(trim(command), exitstat=exit_status)
     if (exit_status /= 0) error stop "reopened writer data differs in h5dump"
+
+    call h5_init()
+    h5_defer_close = .true.
+    inquire(file=trim(path)//".deferred", exist=deferred_exists)
+    if (deferred_exists) then
+        open(newunit=unit, file=trim(path)//".deferred", status="old", action="readwrite")
+        close(unit, status="delete")
+    end if
+    call h5_create(trim(path)//".deferred", file_id)
+    call h5_add(file_id, "before_reopen", 31)
+    call h5_close(file_id)
+    inquire(file=trim(path)//".deferred", exist=deferred_exists)
+    if (deferred_exists) error stop "deferred writer flushed during h5_close"
+    call h5_open_rw(trim(path)//".deferred", file_id)
+    call h5_add(file_id, "after_reopen", 32)
+    call h5_close(file_id)
+    call h5_deinit()
+    h5_defer_close = .false.
+    call h5_open(trim(path)//".deferred", file_id)
+    call h5_get(file_id, "before_reopen", scalar)
+    if (scalar /= 31) error stop "deferred writer lost pre-reopen data"
+    call h5_get(file_id, "after_reopen", scalar)
+    if (scalar /= 32) error stop "deferred writer lost reopened data"
+    call h5_close(file_id)
+    call h5_deinit()
 
 end program test_hdf5_tools_write

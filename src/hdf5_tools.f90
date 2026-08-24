@@ -40,6 +40,10 @@ module hdf5_tools
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
     type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
     logical, save, public :: h5overwrite = .false.
+    ! When enabled, h5_close retains same-process writer state and h5_deinit
+    ! emits each final file image once.  This is useful for applications such
+    ! as MEPHIT that perform many close/reopen updates to one output file.
+    logical, save, public :: h5_defer_close = .false.
 
     interface h5_get
         module procedure h5_get_int
@@ -126,14 +130,35 @@ contains
 
     subroutine h5_deinit()
         integer :: slot
+        type(fortio_status_t) :: status
 
         do slot = 1, MAX_OPEN_FILES
             if (.not. in_use(slot) .or. .not. root_handle(slot)) cycle
-            call close_root(slot)
+            if (h5_defer_close .and. handle_mode(slot) == MODE_WRITE) then
+                call flush_unlimited_buffers(slot)
+                if (read_shadow_open(slot)) then
+                    call files(slot)%close(status)
+                    call require_ok(status)
+                    read_shadow_open(slot) = .false.
+                end if
+                call writers(slot)%suspend(status)
+                call require_ok(status)
+            else
+                call close_root(slot)
+            end if
             if (handle_mode(slot) == MODE_WRITE) &
                 call write_session_unlock(write_lock_token(slot))
             call invalidate_root(slot)
         end do
+        if (h5_defer_close) then
+            do slot = 1, MAX_OPEN_FILES
+                if (in_use(slot)) cycle
+                if (.not. allocated(writers(slot)%path)) cycle
+                if (writers(slot)%opened) cycle
+                call writers(slot)%flush(status)
+                call require_ok(status)
+            end do
+        end if
         call clear_nonpersistent_handles()
     end subroutine h5_deinit
 
@@ -176,6 +201,20 @@ contains
         integer(c_int) :: lock_token
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
+        ! A newly created deferred writer has no on-disk file until h5_deinit
+        ! flushes it, so check retained state before the filesystem in that
+        ! mode.  Preserve ordinary open_rw behavior for externally removed
+        ! files when close deferral is disabled.
+        slot = 0
+        if (h5_defer_close) slot = persistent_writer_slot(trim(filename))
+        if (slot > 0) then
+            call writers(slot)%reopen(trim(filename), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            h5id = int(slot, HID_T)
+            return
+        end if
         if (posix_path_exists(trim(filename)//c_null_char) == 0_c_int) then
             slot = allocate_handle()
             call writers(slot)%create(trim(filename), status)
@@ -235,12 +274,24 @@ contains
         integer :: slot
         logical :: writing
         integer(c_int) :: lock_token
+        type(fortio_status_t) :: status
 
         slot = require_id(h5id)
         if (.not. root_handle(slot)) error stop "h5_close requires a file identifier"
         writing = handle_mode(slot) == MODE_WRITE
         lock_token = write_lock_token(slot)
-        call close_root(slot)
+        if (writing .and. h5_defer_close) then
+            call flush_unlimited_buffers(slot)
+            if (read_shadow_open(slot)) then
+                call files(slot)%close(status)
+                call require_ok(status)
+                read_shadow_open(slot) = .false.
+            end if
+            call writers(slot)%suspend(status)
+            call require_ok(status)
+        else
+            call close_root(slot)
+        end if
         call invalidate_root(slot)
         if (writing) call write_session_unlock(lock_token)
         h5id = -1_HID_T
@@ -632,7 +683,7 @@ contains
         slot = require_readable(h5id)
         path = joined_path(slot, dataset)
         call files(root_slot(slot))%describe(path, is_group, type_class, dimensions, &
-                                              status, element_size)
+            status, element_size)
         call require_ok(status)
         if (is_group) error stop "HDF5 integer scalar read found a group"
         select case (size(dimensions))
