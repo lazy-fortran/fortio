@@ -185,19 +185,22 @@ contains
             h5id = int(slot, HID_T)
             return
         end if
-        slot = allocate_handle()
-        if (has_persistent_buffer(trim(filename))) then
-            if (allocated(writers(slot)%path)) then
-                if (writers(slot)%path == trim(filename)) then
-                    call writers(slot)%reopen(trim(filename), status)
-                    call require_ok(status)
-                    call set_root_handle(slot, MODE_WRITE)
-                    write_lock_token(slot) = lock_token
-                    h5id = int(slot, HID_T)
-                    return
-                end if
-            end if
+        ! A writer that was closed in this process already owns the complete
+        ! file image. Reuse it instead of reading and copying the whole file
+        ! for every close/reopen update.
+        slot = persistent_writer_slot(trim(filename))
+        if (slot > 0) then
+            call files(slot)%open(trim(filename), status)
+            call require_ok(status)
+            call writers(slot)%reopen(trim(filename), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            read_shadow_open(slot) = .true.
+            h5id = int(slot, HID_T)
+            return
         end if
+        slot = allocate_handle()
         call files(slot)%open(trim(filename), status)
         call require_ok(status)
         call writers(slot)%create(trim(filename), status)
@@ -209,21 +212,23 @@ contains
         h5id = int(slot, HID_T)
     end subroutine h5_open_rw
 
-    logical function has_persistent_buffer(path) result(found)
+    integer function persistent_writer_slot(path) result(slot)
         character(len=*), intent(in) :: path
-        integer :: slot
+        integer :: candidate
 
-        found = .false.
+        slot = 0
         call handle_table_lock()
-        do slot = 1, MAX_OPEN_FILES
-            if (.not. in_use(slot)) cycle
-            if (handle_mode(slot) /= MODE_UNLIMITED) cycle
-            if (trim(unlimited_buffers(slot)%file_path) /= trim(path)) cycle
-            found = .true.
+        do candidate = 1, MAX_OPEN_FILES
+            if (in_use(candidate)) cycle
+            if (.not. allocated(writers(candidate)%path)) cycle
+            if (writers(candidate)%opened) cycle
+            if (trim(writers(candidate)%path) /= trim(path)) cycle
+            in_use(candidate) = .true.
+            slot = candidate
             exit
         end do
         call handle_table_unlock()
-    end function has_persistent_buffer
+    end function persistent_writer_slot
 
     subroutine h5_close(h5id)
         integer(HID_T), intent(inout) :: h5id

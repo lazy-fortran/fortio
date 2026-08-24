@@ -94,6 +94,16 @@ program test_hdf5_tools_write
     call h5_create(trim(path)//".second", file_id)
     call h5_add(file_id, "second_write", 1)
     call h5_close(file_id)
+    call h5_create(trim(path)//".reopen", file_id)
+    call h5_add(file_id, "before_reopen", 11)
+    call h5_close(file_id)
+    call h5_deinit()
+    call h5_init()
+    call h5_open_rw(trim(path)//".reopen", file_id)
+    call h5_get(file_id, "before_reopen", scalar)
+    if (scalar /= 11) error stop "reopened writer cannot read existing data"
+    call h5_add(file_id, "after_reopen", 22)
+    call h5_close(file_id)
 
     call h5_open(trim(path), file_id)
     call h5_get(file_id, "answer", scalar)
@@ -213,5 +223,11 @@ program test_hdf5_tools_write
     command = "h5dump "//trim(path)//".second > /dev/null"
     call execute_command_line(trim(command), exitstat=exit_status)
     if (exit_status /= 0) error stop "system h5dump rejected reused writer output"
+    command = "h5dump "//trim(path)//".reopen > /dev/null"
+    call execute_command_line(trim(command), exitstat=exit_status)
+    if (exit_status /= 0) error stop "system h5dump rejected reopened writer output"
+    command = "h5dump -d before_reopen "//trim(path)//".reopen | grep -q '(0): 11'"
+    call execute_command_line(trim(command), exitstat=exit_status)
+    if (exit_status /= 0) error stop "reopened writer data differs in h5dump"
 
 end program test_hdf5_tools_write
