@@ -1026,14 +1026,8 @@ contains
                     if (.not. status%ok()) return
                 end do
             case (TYPE_C64)
-                do j = 1, size(this%datasets(i)%values_c64)
-                    call this%output%write_le_r64( &
-                        real(this%datasets(i)%values_c64(j), real64), status)
-                    if (.not. status%ok()) return
-                    call this%output%write_le_r64( &
-                        aimag(this%datasets(i)%values_c64(j)), status)
-                    if (.not. status%ok()) return
-                end do
+                call this%output%write_le_c64_array(this%datasets(i)%values_c64, status)
+                if (.not. status%ok()) return
             end select
         end do
         if (heap_count > 0) then

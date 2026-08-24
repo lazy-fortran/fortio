@@ -55,6 +55,7 @@ module fortio_bytes
         procedure :: write_le_r32 => writer_write_le_r32
         procedure :: write_le_r64 => writer_write_le_r64
         procedure :: write_le_r64_array => writer_write_le_r64_array
+        procedure :: write_le_c64_array => writer_write_le_c64_array
         procedure :: write_bytes => writer_write_bytes
     end type byte_writer_t
 
@@ -271,6 +272,35 @@ contains
             call this%write_bytes(bytes, status)
         end if
     end subroutine writer_write_le_r64_array
+
+    subroutine writer_write_le_c64_array(this, values, status)
+        class(byte_writer_t), intent(inout) :: this
+        complex(real64), contiguous, target, intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+        integer(c_int64_t) :: byte_count, bytes_written
+
+        call status%clear()
+        byte_count = 16_c_int64_t*size(values, kind=c_int64_t)
+        if (host_is_little_endian()) then
+            ! gfortran and the other supported compilers use the standard
+            ! interleaved real/imaginary representation for double complex.
+            ! Keep this as one bulk write: large MEPHIT complex datasets make
+            ! scalar write calls prohibitively expensive.
+            bytes_written = posix_pwrite(this%descriptor, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+            if (bytes_written /= byte_count) then
+                call status%set(FORTIO_EIO, "POSIX write returned incomplete data")
+                return
+            end if
+            this%position = this%position + int(byte_count, int64)
+        else
+            allocate(bytes(16*size(values)))
+            bytes = transfer(values, bytes)
+            call reverse_elements(bytes, 8)
+            call this%write_bytes(bytes, status)
+        end if
+    end subroutine writer_write_le_c64_array
 
     subroutine writer_write_le_r32(this, value, status)
         class(byte_writer_t), intent(inout) :: this
