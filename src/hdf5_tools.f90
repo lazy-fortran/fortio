@@ -40,9 +40,9 @@ module hdf5_tools
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
     type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
     logical, save, public :: h5overwrite = .false.
-    ! When enabled, h5_close retains same-process writer state and h5_deinit
-    ! emits each final file image once.  This is useful for applications such
-    ! as MEPHIT that perform many close/reopen updates to one output file.
+    ! Retained for source compatibility with applications that used the
+    ! deferred-writer optimization.  h5_close still checkpoints and closes
+    ! the file; the writer state remains available for a same-process reopen.
     logical, save, public :: h5_defer_close = .false.
     ! When enabled, the first open_rw of an existing path starts a fresh image
     ! instead of loading every existing dataset into the writer.
@@ -140,31 +140,18 @@ contains
 
         do slot = 1, MAX_OPEN_FILES
             if (.not. in_use(slot) .or. .not. root_handle(slot)) cycle
-            if (h5_defer_close .and. handle_mode(slot) == MODE_WRITE) then
-                call flush_unlimited_buffers(slot)
-                if (read_shadow_open(slot)) then
-                    call files(slot)%close(status)
-                    call require_ok(status)
-                    read_shadow_open(slot) = .false.
-                end if
-                call writers(slot)%suspend(status)
-                call require_ok(status)
-            else
-                call close_root(slot)
-            end if
+            call close_root(slot)
             if (handle_mode(slot) == MODE_WRITE) &
                 call write_session_unlock(write_lock_token(slot))
             call invalidate_root(slot)
         end do
-        if (h5_defer_close) then
-            do slot = 1, MAX_OPEN_FILES
-                if (in_use(slot)) cycle
-                if (.not. allocated(writers(slot)%path)) cycle
-                if (writers(slot)%opened) cycle
-                call writers(slot)%flush(status)
-                call require_ok(status)
-            end do
-        end if
+        do slot = 1, MAX_OPEN_FILES
+            if (in_use(slot)) cycle
+            if (.not. allocated(writers(slot)%path)) cycle
+            if (.not. writers(slot)%pending_flush) cycle
+            call writers(slot)%flush(status)
+            call require_ok(status)
+        end do
         call clear_nonpersistent_handles()
     end subroutine h5_deinit
 
@@ -198,6 +185,8 @@ contains
         if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
         call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
         call require_ok(status)
+        call checkpoint_stream_writer(slot, status)
+        call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
         h5id = int(slot, HID_T)
@@ -213,10 +202,9 @@ contains
         integer :: fileformat_version
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
-        ! A newly created deferred writer has no on-disk file until h5_deinit
-        ! flushes it, so check retained state before the filesystem in that
-        ! mode.  Preserve ordinary open_rw behavior for externally removed
-        ! files when close deferral is disabled.
+        ! A writer may have been closed in this process while retaining its
+        ! in-memory image. Check that state before the filesystem so repeated
+        ! open_rw calls do not reread the complete file.
         slot = 0
         if (h5_defer_close) slot = persistent_writer_slot(trim(filename))
         if (slot > 0) then
@@ -234,6 +222,8 @@ contains
             fileformat_version = 1
             if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
             call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+            call require_ok(status)
+            call checkpoint_stream_writer(slot, status)
             call require_ok(status)
             call set_root_handle(slot, MODE_WRITE)
             write_lock_token(slot) = lock_token
@@ -262,6 +252,8 @@ contains
             fileformat_version = 1
             if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
             call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+            call require_ok(status)
+            call checkpoint_stream_writer(slot, status)
             call require_ok(status)
             call set_root_handle(slot, MODE_WRITE)
             write_lock_token(slot) = lock_token
@@ -311,7 +303,7 @@ contains
         if (.not. root_handle(slot)) error stop "h5_close requires a file identifier"
         writing = handle_mode(slot) == MODE_WRITE
         lock_token = write_lock_token(slot)
-        if (writing .and. h5_defer_close) then
+        if (writing .and. h5_defer_close .and. .not. writers(slot)%streaming) then
             call flush_unlimited_buffers(slot)
             if (read_shadow_open(slot)) then
                 call files(slot)%close(status)
@@ -1637,6 +1629,17 @@ contains
         end if
         call require_ok(status)
     end subroutine close_root
+
+    subroutine checkpoint_stream_writer(slot, status)
+        integer, intent(in) :: slot
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (.not. writers(slot)%streaming) return
+        call writers(slot)%close(status)
+        if (.not. status%ok()) return
+        call writers(slot)%reopen(trim(writers(slot)%path), status)
+    end subroutine checkpoint_stream_writer
 
     subroutine flush_unlimited_buffers(root)
         integer, intent(in) :: root

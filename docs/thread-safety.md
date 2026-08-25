@@ -22,17 +22,22 @@ surface. Treat it as process configuration: set it before entering a parallel
 region and never modify it while I/O calls are active.
 
 Applications that perform many same-process updates to one output file may set
-the public `h5_defer_close` flag before opening it. In that mode `h5_close`
-retains writer state and `h5_deinit` writes the final metadata image. The file
-is not guaranteed to reflect intermediate metadata updates, and external
-writers must not touch the path until `h5_deinit` completes.
+the public `h5_defer_close` flag before opening it. The flag is retained for
+source compatibility. For streaming writers, `h5_close` always writes a
+complete metadata checkpoint, syncs it, and closes the descriptor. For the
+non-streaming path, the flag still defers the potentially multi-gigabyte image
+write until `h5_deinit`; the writer state remains available for a same-process
+`h5_open_rw` without rereading the complete file. External writers must still
+not touch the path while a write session is active.
 
 For large new outputs, `h5_stream_write = .true.` can be enabled together with
-deferred close. Dataset payloads are written directly as they are added, so
-the deferred state contains metadata rather than a second in-memory copy of
-the raw data. Streaming output is unfiltered and is intended for a fresh or
-explicitly truncated file; attempts to enable a deflate filter in this mode
-are rejected.
+deferred close. Dataset payloads are written directly as they are added, so the
+retained state contains metadata rather than a second in-memory copy of the raw
+data. The writer emits an initial valid checkpoint and checkpoints again at
+every `h5_close`; an abort therefore leaves the last committed image readable,
+although data added after that checkpoint may be absent. Streaming output is
+unfiltered and is intended for a fresh or explicitly truncated file; attempts
+to enable a deflate filter in this mode are rejected.
 
 This contract does not provide MPI-I/O, parallel-HDF5 collective operations,
 or concurrent mutation through the same handle.

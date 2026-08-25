@@ -206,6 +206,15 @@ int fortio_posix_close(int descriptor)
 #endif
 }
 
+int fortio_posix_sync(int descriptor)
+{
+#ifdef _WIN32
+    return _commit(descriptor) == 0 ? 0 : -1;
+#else
+    return fsync(descriptor);
+#endif
+}
+
 int fortio_posix_truncate(int descriptor, int64_t length)
 {
     if (length < 0)

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(fortio VERSION 0.2.0 LANGUAGES C Fortran)
+project(fortio VERSION 0.3.0 LANGUAGES C Fortran)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -248,6 +248,13 @@ if(FORTIO_BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/hdf5-existing-recreate.h5" recreate)
     set_tests_properties(hdf5_tools_existing_recreate PROPERTIES
         DEPENDS hdf5_tools_existing_recreate_create)
+
+    add_executable(test_hdf5_deferred_abort test/test_hdf5_deferred_abort.f90)
+    target_link_libraries(test_hdf5_deferred_abort PRIVATE fortio)
+    add_test(NAME hdf5_deferred_abort COMMAND python3
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_hdf5_deferred_abort.py"
+        "$<TARGET_FILE:test_hdf5_deferred_abort>"
+        "${CMAKE_CURRENT_BINARY_DIR}/hdf5-deferred-abort.h5")
 
     add_executable(test_thread_safety test/test_thread_safety.f90)
     target_link_libraries(test_thread_safety PRIVATE fortio OpenMP::OpenMP_Fortran)
