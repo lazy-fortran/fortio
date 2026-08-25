@@ -7,7 +7,12 @@ program test_hdf5_deferred_abort
     character(len=1024) :: path
 
     call get_command_argument(1, path)
-    if (len_trim(path) == 0) error stop "an output path is required"
+    if (len_trim(path) == 0) then
+        ! fpm runs every auto-test without arguments.  The fixture below
+        ! supplies a path and checks the intentional abort against h5dump.
+        write (*, '(a)') "deferred-abort fixture requires an output path"
+        stop 0
+    end if
 
     call h5_init()
     h5_defer_close = .true.

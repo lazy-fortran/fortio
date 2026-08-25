@@ -113,13 +113,11 @@ contains
     subroutine writer_close(this, status)
         class(byte_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
-        integer(c_int) :: io_status, sync_status
+        integer(c_int) :: io_status
 
         call status%clear()
         if (this%descriptor < 0_c_int) return
-        sync_status = posix_sync(this%descriptor)
         io_status = posix_close(this%descriptor)
-        if (sync_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX sync failed")
         if (io_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX close failed")
         this%descriptor = -1_c_int
         this%position = 1_int64

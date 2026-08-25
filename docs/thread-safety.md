@@ -24,7 +24,8 @@ region and never modify it while I/O calls are active.
 Applications that perform many same-process updates to one output file may set
 the public `h5_defer_close` flag before opening it. The flag is retained for
 source compatibility. For streaming writers, `h5_close` always writes a
-complete metadata checkpoint, syncs it, and closes the descriptor. For the
+complete metadata checkpoint and closes the descriptor, matching the normal
+HDF5 close durability contract without forcing an `fsync` on every append. For the
 non-streaming path, the flag still defers the potentially multi-gigabyte image
 write until `h5_deinit`; the writer state remains available for a same-process
 `h5_open_rw` without rereading the complete file. External writers must still
