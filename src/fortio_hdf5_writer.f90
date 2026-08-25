@@ -17,6 +17,10 @@ module fortio_hdf5_writer
     integer, parameter :: TYPE_DIMENSION_LIST = 7
     integer, parameter :: TYPE_I8 = 8
     integer(int64), parameter :: ROOT_ADDRESS = 48_int64
+    ! Reserve space for the superblock and object headers when streaming
+    ! dataset payloads directly into the output image.  MEPHIT's metadata is
+    ! comfortably below this bound; a larger image is rejected explicitly.
+    integer(int64), parameter :: STREAM_HEADER_RESERVE = 16_int64*1024_int64*1024_int64
 
     type :: hdf5_output_attribute_t
         character(len=:), allocatable :: name
@@ -51,6 +55,7 @@ module fortio_hdf5_writer
         logical :: shuffle = .false.
         integer(int64) :: object_address = 0_int64
         integer(int64) :: data_address = 0_int64
+        logical :: streamed = .false.
     end type hdf5_output_dataset_t
 
     type :: hdf5_output_group_t
@@ -61,11 +66,19 @@ module fortio_hdf5_writer
         type(hdf5_output_attribute_t), allocatable :: attributes(:)
     end type hdf5_output_group_t
 
+    type :: hdf5_free_range_t
+        integer(int64) :: offset = 0_int64
+        integer(int64) :: size = 0_int64
+    end type hdf5_free_range_t
+
     type, public :: hdf5_writer_t
         character(len=:), allocatable :: path
         type(byte_writer_t) :: output
         type(hdf5_output_group_t), allocatable :: groups(:)
         type(hdf5_output_dataset_t), allocatable :: datasets(:)
+        type(hdf5_free_range_t), allocatable :: free_ranges(:)
+        integer(int64) :: stream_end = 0_int64
+        logical :: streaming = .false.
         logical :: opened = .false.
     contains
         procedure :: create => hdf5_writer_create
@@ -101,6 +114,7 @@ module fortio_hdf5_writer
         procedure :: set_dimension_list => hdf5_set_dimension_list
         procedure :: set_deflate => hdf5_set_deflate
         procedure :: remove_dataset => hdf5_remove_dataset
+        procedure :: stream_dataset => hdf5_stream_dataset
         procedure :: object_exists => hdf5_object_exists
         procedure :: suspend => hdf5_writer_suspend
         procedure :: flush => hdf5_writer_flush
@@ -134,6 +148,11 @@ contains
             call status%set(FORTIO_ESHAPE, "deflate level must be between zero and nine")
             return
         end if
+        if (this%streaming) then
+            call status%set(FORTIO_ENOTSUP, &
+                "deflate filters are incompatible with streaming HDF5 output")
+            return
+        end if
         call find_dataset(this, name, dataset_id, status)
         if (.not. status%ok()) return
         this%datasets(dataset_id)%shuffle = shuffle
@@ -141,10 +160,11 @@ contains
         this%datasets(dataset_id)%deflate_level = level
     end subroutine hdf5_set_deflate
 
-    subroutine hdf5_writer_create(this, path, status)
+    subroutine hdf5_writer_create(this, path, status, streaming)
         class(hdf5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         type(fortio_status_t), intent(inout) :: status
+        logical, intent(in), optional :: streaming
 
         call status%clear()
         call this%output%close(status)
@@ -152,12 +172,21 @@ contains
         this%path = trim(path)
         if (allocated(this%datasets)) deallocate(this%datasets)
         if (allocated(this%groups)) deallocate(this%groups)
-        allocate(this%datasets(0), this%groups(1))
+        if (allocated(this%free_ranges)) deallocate(this%free_ranges)
+        allocate(this%datasets(0), this%groups(1), this%free_ranges(0))
         this%groups(1)%path = ""
         this%groups(1)%name = ""
         this%groups(1)%parent_group = 0
         this%groups(1)%object_address = ROOT_ADDRESS
         allocate(this%groups(1)%attributes(0))
+        this%streaming = .false.
+        if (present(streaming)) this%streaming = streaming
+        this%stream_end = STREAM_HEADER_RESERVE
+        if (this%streaming) then
+            call this%output%open(this%path, status)
+            if (.not. status%ok()) return
+            call this%output%seek(this%stream_end + 1_int64)
+        end if
         this%opened = .true.
     end subroutine hdf5_writer_create
 
@@ -191,9 +220,10 @@ contains
         type(fortio_status_t), intent(inout) :: status
 
         call status%clear()
-        ! Keep the complete image in memory for a same-process reopen.  The
-        ! compatibility layer uses this only when it explicitly defers the
-        ! close flush until h5_deinit; ordinary close semantics are unchanged.
+        ! Keep writer state for a same-process reopen.  In streaming mode raw
+        ! payloads are already on disk; otherwise the retained state includes
+        ! the complete image until h5_deinit.  Ordinary close semantics are
+        ! unchanged.
         this%opened = .false.
     end subroutine hdf5_writer_suspend
 
@@ -236,6 +266,8 @@ contains
         dataset%dimensions = dimensions
         dataset%values_i8 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine hdf5_add_i8
 
@@ -257,6 +289,8 @@ contains
         dataset%value_text = value
         dataset%char_array = .true.
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine hdf5_add_char
 
@@ -321,6 +355,8 @@ contains
         dataset%dimensions = [int(size(values), int64)]
         dataset%values_i64 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine hdf5_add_i64_1
 
@@ -350,6 +386,8 @@ contains
         dataset%dimensions = [int(size(values), int64)]
         dataset%values_r32 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine hdf5_add_r32_1
 
@@ -373,6 +411,8 @@ contains
             dataset%value_text = value(:len_trim(value))
         end if
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine hdf5_add_text_scalar
 
@@ -472,6 +512,8 @@ contains
         dataset%dimensions = dimensions
         dataset%values_c64 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine add_c64_flat
 
@@ -494,6 +536,8 @@ contains
         dataset%dimensions = dimensions
         dataset%values_i32 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine add_i32_flat
 
@@ -516,6 +560,8 @@ contains
         dataset%dimensions = dimensions
         dataset%values_r64 = values
         allocate(dataset%attributes(0))
+        call this%stream_dataset(dataset, status)
+        if (.not. status%ok()) return
         call append_dataset(this%datasets, dataset)
     end subroutine add_r64_flat
 
@@ -626,7 +672,7 @@ contains
                 "NAME", trim(dataset_name), status)
         else
             write (scale_name, '("This is a netCDF dimension but not a netCDF variable.",i10)') &
-                size(this%datasets(dataset_id)%values_i32)
+                product(this%datasets(dataset_id)%dimensions)
             call append_dimension_scale_text(this%datasets(dataset_id)%attributes, &
                 "NAME", scale_name, status)
         end if
@@ -668,11 +714,16 @@ contains
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_output_dataset_t), allocatable :: temporary(:)
         integer :: dataset_id, count
+        integer(int64) :: data_size
 
         call find_dataset(this, name, dataset_id, status)
         if (.not. status%ok()) then
             call status%clear()
             return
+        end if
+        if (this%streaming .and. this%datasets(dataset_id)%streamed) then
+            data_size = dataset_data_size(this%datasets(dataset_id))
+            call release_stream_range(this, this%datasets(dataset_id)%data_address, data_size)
         end if
         count = size(this%datasets)
         allocate(temporary(count - 1))
@@ -828,6 +879,99 @@ contains
         call move_alloc(temporary, datasets)
     end subroutine append_dataset
 
+    subroutine hdf5_stream_dataset(this, dataset, status)
+        class(hdf5_writer_t), intent(inout) :: this
+        type(hdf5_output_dataset_t), intent(inout) :: dataset
+        type(fortio_status_t), intent(inout) :: status
+        integer(int64) :: data_size, offset
+        integer(int8), allocatable :: bytes(:)
+
+        call status%clear()
+        if (.not. this%streaming) return
+        data_size = dataset_data_size(dataset)
+        call allocate_stream_range(this, data_size, offset)
+        dataset%data_address = offset
+        dataset%streamed = .true.
+        if (data_size == 0_int64) return
+
+        call this%output%seek(offset + 1_int64)
+        select case (dataset%type_code)
+        case (TYPE_I8)
+            call this%output%write_bytes(dataset%values_i8, status)
+            deallocate(dataset%values_i8)
+        case (TYPE_I32)
+            allocate(bytes(4*size(dataset%values_i32)))
+            bytes = transfer(dataset%values_i32, bytes)
+            call convert_native_to_little_endian(bytes, 4)
+            call this%output%write_bytes(bytes, status)
+            deallocate(bytes, dataset%values_i32)
+        case (TYPE_I64)
+            allocate(bytes(8*size(dataset%values_i64)))
+            bytes = transfer(dataset%values_i64, bytes)
+            call convert_native_to_little_endian(bytes, 8)
+            call this%output%write_bytes(bytes, status)
+            deallocate(bytes, dataset%values_i64)
+        case (TYPE_R64)
+            call this%output%write_le_r64_array(dataset%values_r64, status)
+            deallocate(dataset%values_r64)
+        case (TYPE_R32)
+            allocate(bytes(4*size(dataset%values_r32)))
+            bytes = transfer(dataset%values_r32, bytes)
+            call convert_native_to_little_endian(bytes, 4)
+            call this%output%write_bytes(bytes, status)
+            deallocate(bytes, dataset%values_r32)
+        case (TYPE_C64)
+            call this%output%write_le_c64_array(dataset%values_c64, status)
+            deallocate(dataset%values_c64)
+        case (TYPE_TEXT)
+            allocate(bytes(len(dataset%value_text)))
+            bytes = transfer(dataset%value_text, bytes)
+            call this%output%write_bytes(bytes, status)
+            deallocate(bytes)
+        end select
+    end subroutine hdf5_stream_dataset
+
+    subroutine allocate_stream_range(this, data_size, offset)
+        class(hdf5_writer_t), intent(inout) :: this
+        integer(int64), intent(in) :: data_size
+        integer(int64), intent(out) :: offset
+        type(hdf5_free_range_t), allocatable :: remaining(:)
+        integer :: i, count
+
+        do i = 1, size(this%free_ranges)
+            if (this%free_ranges(i)%size < data_size) cycle
+            offset = this%free_ranges(i)%offset
+            if (this%free_ranges(i)%size == data_size) then
+                count = size(this%free_ranges)
+                allocate(remaining(max(0, count - 1)))
+                if (i > 1) remaining(:i - 1) = this%free_ranges(:i - 1)
+                if (i < count) remaining(i:) = this%free_ranges(i + 1:)
+                call move_alloc(remaining, this%free_ranges)
+            else
+                this%free_ranges(i)%offset = this%free_ranges(i)%offset + data_size
+                this%free_ranges(i)%size = this%free_ranges(i)%size - data_size
+            end if
+            return
+        end do
+        offset = this%stream_end
+        this%stream_end = this%stream_end + data_size
+    end subroutine allocate_stream_range
+
+    subroutine release_stream_range(this, offset, data_size)
+        class(hdf5_writer_t), intent(inout) :: this
+        integer(int64), intent(in) :: offset, data_size
+        type(hdf5_free_range_t), allocatable :: temporary(:)
+        integer :: count
+
+        if (.not. this%streaming .or. data_size <= 0_int64) return
+        count = size(this%free_ranges)
+        allocate(temporary(count + 1))
+        if (count > 0) temporary(:count) = this%free_ranges
+        temporary(count + 1)%offset = offset
+        temporary(count + 1)%size = data_size
+        call move_alloc(temporary, this%free_ranges)
+    end subroutine release_stream_range
+
     subroutine ensure_group_path(this, path, group_id, status)
         class(hdf5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
@@ -939,8 +1083,10 @@ contains
 
         call status%clear()
         if (.not. this%opened) return
-        call prepare_filtered_datasets(this, status)
-        if (.not. status%ok()) return
+        if (.not. this%streaming) then
+            call prepare_filtered_datasets(this, status)
+            if (.not. status%ok()) return
+        end if
         heap_count = 0
         do i = 1, size(this%datasets)
             if (.not. this%datasets(i)%is_dimension_scale) cycle
@@ -957,6 +1103,7 @@ contains
             next_address = next_address + dataset_header_size(this%datasets(i))
         end do
         do i = 1, size(this%datasets)
+            if (this%streaming .and. this%datasets(i)%streamed) cycle
             this%datasets(i)%data_address = next_address
             next_address = next_address + dataset_data_size(this%datasets(i))
         end do
@@ -968,9 +1115,19 @@ contains
             end do
         end if
         eof_address = next_address
+        if (this%streaming) then
+            if (next_address > STREAM_HEADER_RESERVE) then
+                call status%set(FORTIO_ENOTSUP, &
+                    "HDF5 streaming metadata exceeds reserved header space")
+                return
+            end if
+            eof_address = max(eof_address, this%stream_end)
+        end if
 
         if (this%output%descriptor < 0) then
             call this%output%open(this%path, status)
+        else if (this%streaming) then
+            call this%output%seek(1_int64)
         else
             call this%output%reset(status)
         end if
@@ -992,6 +1149,7 @@ contains
             if (.not. status%ok()) return
         end do
         do i = 1, size(this%datasets)
+            if (this%streaming .and. this%datasets(i)%streamed) cycle
             if (allocated(this%datasets(i)%filtered_bytes)) then
                 call this%output%write_bytes(this%datasets(i)%filtered_bytes, status)
                 if (.not. status%ok()) return
@@ -1269,7 +1427,14 @@ contains
     integer(int64) function dataset_data_size(dataset) result(total)
         type(hdf5_output_dataset_t), intent(in) :: dataset
 
-        if (allocated(dataset%filtered_bytes)) then
+        if (dataset%streamed) then
+            if (dataset%type_code == TYPE_TEXT) then
+                total = len(dataset%value_text, kind=int64)
+            else
+                total = int(dataset_element_size(dataset), int64) * &
+                    product(dataset%dimensions)
+            end if
+        else if (allocated(dataset%filtered_bytes)) then
             total = size(dataset%filtered_bytes, kind=int64)
         else if (dataset%type_code == TYPE_I8) then
             total = size(dataset%values_i8, kind=int64)

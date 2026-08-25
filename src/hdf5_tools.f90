@@ -44,6 +44,12 @@ module hdf5_tools
     ! emits each final file image once.  This is useful for applications such
     ! as MEPHIT that perform many close/reopen updates to one output file.
     logical, save, public :: h5_defer_close = .false.
+    ! When enabled, the first open_rw of an existing path starts a fresh image
+    ! instead of loading every existing dataset into the writer.
+    logical, save, public :: h5_truncate_existing = .false.
+    ! When enabled, new dataset payloads are written directly to the output
+    ! file instead of being retained in the deferred writer image.
+    logical, save, public :: h5_stream_write = .false.
 
     interface h5_get
         module procedure h5_get_int
@@ -182,10 +188,15 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
         integer(c_int) :: lock_token
+        integer :: fileformat_version
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
         slot = allocate_handle()
-        call writers(slot)%create(trim(filename), status)
+        call writers(slot)%create(trim(filename), status, h5_stream_write)
+        call require_ok(status)
+        fileformat_version = 1
+        if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+        call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
@@ -199,6 +210,7 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
         integer(c_int) :: lock_token
+        integer :: fileformat_version
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
         ! A newly created deferred writer has no on-disk file until h5_deinit
@@ -217,7 +229,11 @@ contains
         end if
         if (posix_path_exists(trim(filename)//c_null_char) == 0_c_int) then
             slot = allocate_handle()
-            call writers(slot)%create(trim(filename), status)
+            call writers(slot)%create(trim(filename), status, h5_stream_write)
+            call require_ok(status)
+            fileformat_version = 1
+            if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+            call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
             call require_ok(status)
             call set_root_handle(slot, MODE_WRITE)
             write_lock_token(slot) = lock_token
@@ -239,10 +255,25 @@ contains
             h5id = int(slot, HID_T)
             return
         end if
+        if (h5_truncate_existing) then
+            slot = allocate_handle()
+            call writers(slot)%create(trim(filename), status, h5_stream_write)
+            call require_ok(status)
+            fileformat_version = 1
+            if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+            call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            h5id = int(slot, HID_T)
+            return
+        end if
         slot = allocate_handle()
         call files(slot)%open(trim(filename), status)
         call require_ok(status)
-        call writers(slot)%create(trim(filename), status)
+        ! Copying an existing image must retain the conventional in-memory
+        ! writer: a streaming create would truncate the source before copy.
+        call writers(slot)%create(trim(filename), status, .false.)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
