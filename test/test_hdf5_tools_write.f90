@@ -5,7 +5,7 @@ program test_hdf5_tools_write
         h5_open, h5_open_group, h5overwrite, h5_delete, &
         h5_define_unlimited_array, h5_define_unlimited_matrix, h5_append_double_1, &
         h5_exists, h5_open_rw, h5_copy, h5_add_float_1, h5_init, h5_deinit
-    use hdf5_tools, only: h5_defer_close
+    use hdf5_tools, only: h5_defer_close, h5_stream_write
     use hdf5_tools_f2003, only: H5T_NATIVE_DOUBLE, H5T_NATIVE_INTEGER
     implicit none
 
@@ -234,6 +234,7 @@ program test_hdf5_tools_write
 
     call h5_init()
     h5_defer_close = .true.
+    h5_stream_write = .true.
     inquire(file=trim(path)//".deferred", exist=deferred_exists)
     if (deferred_exists) then
         open(newunit=unit, file=trim(path)//".deferred", status="old", action="readwrite")
@@ -243,12 +244,16 @@ program test_hdf5_tools_write
     call h5_add(file_id, "before_reopen", 31)
     call h5_close(file_id)
     inquire(file=trim(path)//".deferred", exist=deferred_exists)
-    if (deferred_exists) error stop "deferred writer flushed during h5_close"
+    if (.not. deferred_exists) error stop "deferred writer did not checkpoint during h5_close"
+    command = "h5dump " // trim(path) // ".deferred > /dev/null"
+    call execute_command_line(trim(command), exitstat=exit_status)
+    if (exit_status /= 0) error stop "checkpointed deferred writer is not valid HDF5"
     call h5_open_rw(trim(path)//".deferred", file_id)
     call h5_add(file_id, "after_reopen", 32)
     call h5_close(file_id)
     call h5_deinit()
     h5_defer_close = .false.
+    h5_stream_write = .false.
     call h5_open(trim(path)//".deferred", file_id)
     call h5_get(file_id, "before_reopen", scalar)
     if (scalar /= 31) error stop "deferred writer lost pre-reopen data"

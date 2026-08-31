@@ -79,6 +79,8 @@ module fortio_hdf5_writer
         type(hdf5_free_range_t), allocatable :: free_ranges(:)
         integer(int64) :: stream_end = 0_int64
         logical :: streaming = .false.
+        logical :: output_initialized = .false.
+        logical :: pending_flush = .false.
         logical :: opened = .false.
     contains
         procedure :: create => hdf5_writer_create
@@ -180,6 +182,8 @@ contains
         this%groups(1)%object_address = ROOT_ADDRESS
         allocate(this%groups(1)%attributes(0))
         this%streaming = .false.
+        this%output_initialized = .false.
+        this%pending_flush = .false.
         if (present(streaming)) this%streaming = streaming
         this%stream_end = STREAM_HEADER_RESERVE
         if (this%streaming) then
@@ -188,6 +192,7 @@ contains
             call this%output%seek(this%stream_end + 1_int64)
         end if
         this%opened = .true.
+        this%pending_flush = .false.
     end subroutine hdf5_writer_create
 
     subroutine hdf5_writer_reopen(this, path, status)
@@ -212,6 +217,8 @@ contains
             call status%set(FORTIO_ESTATE, "HDF5 writer state is incomplete")
             return
         end if
+        call this%output%reopen(this%path, status)
+        if (.not. status%ok()) return
         this%opened = .true.
     end subroutine hdf5_writer_reopen
 
@@ -225,6 +232,7 @@ contains
         ! the complete image until h5_deinit.  Ordinary close semantics are
         ! unchanged.
         this%opened = .false.
+        this%pending_flush = .true.
     end subroutine hdf5_writer_suspend
 
     subroutine hdf5_writer_flush(this, status)
@@ -1125,7 +1133,17 @@ contains
         end if
 
         if (this%output%descriptor < 0) then
-            call this%output%open(this%path, status)
+            if (this%output_initialized) then
+                call this%output%reopen(this%path, status)
+                if (.not. status%ok()) return
+                if (this%streaming) then
+                    call this%output%seek(1_int64)
+                else
+                    call this%output%reset(status)
+                end if
+            else
+                call this%output%open(this%path, status)
+            end if
         else if (this%streaming) then
             call this%output%seek(1_int64)
         else
@@ -1193,7 +1211,11 @@ contains
             call this%output%write_bytes(metadata, status)
             if (.not. status%ok()) return
         end if
+        this%output_initialized = .true.
+        call this%output%close(status)
+        if (.not. status%ok()) return
         this%opened = .false.
+        this%pending_flush = .false.
     end subroutine hdf5_writer_close
 
     subroutine prepare_filtered_datasets(this, status)

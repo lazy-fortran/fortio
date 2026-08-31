@@ -3,8 +3,8 @@ module fortio_bytes
         c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_posix, only: mapped_close, mapped_copy, mapped_copy_swap64, mapped_open, &
-        posix_close, posix_create_write, posix_open_read, posix_pwrite, &
-        posix_pwrite_swap64, posix_truncate
+        posix_close, posix_create_write, posix_open_read, posix_open_write, posix_pwrite, &
+        posix_pwrite_swap64, posix_sync, posix_truncate
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -40,7 +40,9 @@ module fortio_bytes
         integer(int64) :: position = 1_int64
     contains
         procedure :: open => writer_open
+        procedure :: reopen => writer_reopen
         procedure :: close => writer_close
+        procedure :: sync => writer_sync
         procedure :: reset => writer_reset
         procedure :: seek => writer_seek
         procedure :: write_i8 => writer_write_i8
@@ -76,15 +78,47 @@ contains
         this%position = 1_int64
     end subroutine writer_open
 
+    subroutine writer_reopen(this, path, status)
+        class(byte_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (this%descriptor >= 0_c_int) then
+            call status%set(FORTIO_EIO, "cannot reopen an open file")
+            return
+        end if
+        this%descriptor = posix_open_write(trim(path)//c_null_char)
+        if (this%descriptor < 0_c_int) then
+            call status%set(FORTIO_EIO, "POSIX open failed")
+            return
+        end if
+        this%position = 1_int64
+    end subroutine writer_reopen
+
+    subroutine writer_sync(this, status)
+        class(byte_writer_t), intent(in) :: this
+        type(fortio_status_t), intent(inout) :: status
+        integer(c_int) :: io_status
+
+        call status%clear()
+        if (this%descriptor < 0_c_int) then
+            call status%set(FORTIO_EIO, "cannot sync a closed file")
+            return
+        end if
+        io_status = posix_sync(this%descriptor)
+        if (io_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX sync failed")
+    end subroutine writer_sync
+
     subroutine writer_close(this, status)
         class(byte_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
+        integer(c_int) :: io_status
 
         call status%clear()
         if (this%descriptor < 0_c_int) return
         io_status = posix_close(this%descriptor)
-        if (io_status /= 0) call status%set(FORTIO_EIO, "POSIX close failed")
+        if (io_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX close failed")
         this%descriptor = -1_c_int
         this%position = 1_int64
     end subroutine writer_close

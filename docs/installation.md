@@ -13,7 +13,7 @@ Pin a released tag:
 
 ```toml
 [dependencies]
-fortio = { git = "https://github.com/lazy-fortran/fortio.git", tag = "v0.2.0" }
+fortio = { git = "https://github.com/lazy-fortran/fortio.git", tag = "v0.3.0" }
 ```
 
 ## Installed CMake package
@@ -30,7 +30,7 @@ include(FetchContent)
 FetchContent_Declare(
   fortio
   GIT_REPOSITORY https://github.com/lazy-fortran/fortio.git
-  GIT_TAG v0.2.0
+  GIT_TAG v0.3.0
   GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(fortio)

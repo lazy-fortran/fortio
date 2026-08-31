@@ -11,8 +11,12 @@ program test_hdf5_existing_open
 
     call get_command_argument(1, path)
     call get_command_argument(2, mode)
-    if (len_trim(path) == 0 .or. len_trim(mode) == 0) &
-        error stop "an output path and mode are required"
+    if (len_trim(path) == 0 .or. len_trim(mode) == 0) then
+        ! CMake supplies the two explicit lifecycle cases.  Keep fpm's
+        ! argument-free auto-test invocation harmless and deterministic.
+        write (*, '(a)') "existing-open fixture requires a path and mode"
+        stop 0
+    end if
 
     select case (trim(mode))
     case ("create")
