@@ -116,7 +116,7 @@ def run_consumer(consumer: dict[str, object], workspace: Path) -> None:
     python_source = checkout / "python"
     if python_source.is_dir():
         previous_pythonpath = environment.get("PYTHONPATH", "")
-        environment["PYTHONPATH"] = str(python_source)
+        environment["PYTHONPATH"] = f"{python_source}:{build}"
         if previous_pythonpath:
             environment["PYTHONPATH"] += f":{previous_pythonpath}"
     python_packages = consumer.get("python_packages", [])
