@@ -1,14 +1,16 @@
 program test_netcdf4_read
     use, intrinsic :: iso_fortran_env, only: int32, real64
-    use netcdf, only: NF90_CHAR, NF90_ENOTATT, NF90_GLOBAL, NF90_NOERR, NF90_NOWRITE, &
+    use netcdf, only: NF90_CHAR, NF90_ENOTATT, NF90_ERANGE, NF90_EINVAL, NF90_GLOBAL, &
+        NF90_NOERR, NF90_NOWRITE, &
         nf90_close, nf90_get_att, nf90_get_var, nf90_inq_dimid, nf90_inq_varid, &
         nf90_inquire_attribute, nf90_inquire_dimension, nf90_open
     implicit none
 
     character(len=1024) :: fixture, cdl, command
     character(len=16) :: convention, units
-    integer(int32) :: count, indices(2)
-    real(real64) :: radius(3), radius_values(3), coefficients(3, 2), torflux
+    integer(int32) :: count, indices(2), integer_radius_values(3)
+    real(real64) :: radius(3), radius_values(3), coefficients(3, 2), flattened(6), &
+        torflux, real_count
     integer :: ncid, dimid, varid, length, command_status, attribute_type
 
     call get_command_argument(1, fixture)
@@ -33,6 +35,13 @@ program test_netcdf4_read
     if (nf90_get_var(ncid, varid, count) /= NF90_NOERR) &
         error stop "NetCDF-4 scalar read failed"
     if (count /= 3) error stop "NetCDF-4 scalar value differs"
+    if (nf90_get_var(ncid, varid, real_count) /= NF90_NOERR) &
+        error stop "NetCDF-4 native numeric conversion failed"
+    if (real_count /= 3.0_real64) error stop "NetCDF-4 numeric conversion differs"
+    if (nf90_inq_varid(ncid, "huge_value", varid) /= NF90_NOERR) &
+        error stop "NetCDF-4 huge-value lookup failed"
+    if (nf90_get_var(ncid, varid, count) /= NF90_ERANGE) &
+        error stop "NetCDF-4 out-of-range conversion did not return NF90_ERANGE"
     if (nf90_inquire_attribute(ncid, varid, "absent") /= NF90_ENOTATT) &
         error stop "NetCDF-4 missing attribute inquiry differs"
     if (nf90_inq_varid(ncid, "indices", varid) /= NF90_NOERR) &
@@ -59,8 +68,14 @@ program test_netcdf4_read
         error stop "NetCDF-4 real vector read failed"
     if (any(abs(radius_values - [1.25_real64, -2.5_real64, 4.75_real64]) > 1.0e-12_real64)) &
         error stop "NetCDF-4 real vector differs"
+    if (nf90_get_var(ncid, varid, integer_radius_values) /= NF90_NOERR) &
+        error stop "NetCDF-4 real-to-integer conversion failed"
+    if (any(integer_radius_values /= [1_int32, -2_int32, 4_int32])) &
+        error stop "NetCDF-4 real-to-integer conversion differs"
     if (nf90_inq_varid(ncid, "coefficients", varid) /= NF90_NOERR) &
         error stop "NetCDF-4 matrix lookup failed"
+    if (nf90_get_var(ncid, varid, flattened) /= NF90_EINVAL) &
+        error stop "NetCDF-4 rank-2 variable was accepted by rank-1 getter"
     if (nf90_get_var(ncid, varid, coefficients) /= NF90_NOERR) &
         error stop "NetCDF-4 matrix read failed"
     if (any(abs(coefficients - reshape([1, 2, 3, 4, 5, 6], [3, 2])) > 1.0e-12_real64)) &

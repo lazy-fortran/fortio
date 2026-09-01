@@ -1,12 +1,13 @@
 program test_hdf5_read
     use, intrinsic :: iso_fortran_env, only: int32, real64
-    use fortio, only: fortio_file_t, fortio_status_t
+    use fortio, only: fortio_file_t, fortio_status_t, FORTIO_ETYPE
     implicit none
 
     type(fortio_file_t) :: file
     type(fortio_status_t) :: status
     character(len=1024) :: fixture, generator, command
     integer(int32) :: scalar
+    real(real64) :: strict_scalar
     real(real64), allocatable :: x(:), matrix(:, :)
     integer :: command_status
     logical :: fixture_exists
@@ -28,6 +29,9 @@ program test_hdf5_read
     call file%read("/grid/Nt", scalar, status)
     if (.not. status%ok()) error stop status%message
     if (scalar /= 42) error stop "HDF5 scalar differs from oracle"
+    call file%read("/grid/Nt", strict_scalar, status)
+    if (status%code /= FORTIO_ETYPE) &
+        error stop "native typed Fortio read silently converted an integer"
 
     call file%read("/grid/x_values", x, status)
     if (.not. status%ok()) error stop status%message

@@ -9,6 +9,9 @@ dimensions:
     one = 1 ;
 variables:
     int scalar ;
+    byte small_byte ;
+    short small_short ;
+    double huge_value ;
     double x_values(x) ;
         x_values:units = "m" ;
     double matrix(y, x) ;
@@ -22,6 +25,9 @@ variables:
     :rho_lcfs = 1.5 ;
 data:
     scalar = 42 ;
+    small_byte = -7 ;
+    small_short = 1234 ;
+    huge_value = 1.e300 ;
     x_values = 1.25, -2.5, 4.75 ;
     matrix = 1, 2, 3, 4, 5, 6 ;
     cube = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ;

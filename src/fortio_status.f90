@@ -12,6 +12,7 @@ module fortio_status
     integer, parameter, public :: FORTIO_ENOTSUP = -6
     integer, parameter, public :: FORTIO_ESTATE = -7
     integer, parameter, public :: FORTIO_EEXIST = -8
+    integer, parameter, public :: FORTIO_ERANGE = -60
 
     type, public :: fortio_status_t
         !! Result of an operation; `ok()` is true only for `FORTIO_SUCCESS`.
