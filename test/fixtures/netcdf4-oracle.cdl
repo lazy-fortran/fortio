@@ -4,6 +4,7 @@ dimensions:
     mode = 2 ;
 variables:
     int count ;
+    double huge_value ;
     int indices(mode) ;
     double radius(radius) ;
         radius:units = "m" ;
@@ -19,6 +20,7 @@ variables:
         :gvec2chartmap_boozer_factor = 1LL ;
 data:
     count = 3 ;
+    huge_value = 1.e300 ;
     indices = 4, 9 ;
     radius = 0, 0.5, 1 ;
     radius_values = 1.25, -2.5, 4.75 ;

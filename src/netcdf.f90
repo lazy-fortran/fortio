@@ -1,4 +1,5 @@
 module netcdf
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: decode_be_i32, decode_be_i64
     use fortio_netcdf_classic, only: classic_file_t, classic_dimension_t, &
@@ -8,7 +9,7 @@ module netcdf
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
         FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST, &
-        FORTIO_EIO, FORTIO_EFORMAT, FORTIO_ETYPE
+        FORTIO_EIO, FORTIO_EFORMAT, FORTIO_ERANGE, FORTIO_ETYPE
     use fortio_posix, only: handle_table_lock, handle_table_unlock
     implicit none
     private
@@ -21,6 +22,7 @@ module netcdf
     integer, parameter, public :: NF90_ENOTSUPPORT = FORTIO_ENOTSUP
     integer, parameter, public :: NF90_EINVAL = FORTIO_ESHAPE
     integer, parameter, public :: NF90_EEXIST = FORTIO_EEXIST
+    integer, parameter, public :: NF90_ERANGE = FORTIO_ERANGE
     integer, parameter, public :: NF90_NOWRITE = 0
     integer, parameter, public :: NF90_WRITE = 1
     integer, parameter, public :: NF90_CLOBBER = 0
@@ -678,14 +680,23 @@ contains
         integer, intent(in) :: ncid, varid
         integer(int32), intent(out) :: value
         type(fortio_status_t) :: status
+        real(real64), allocatable :: temporary(:)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_i32_scalar( &
-                netcdf4_files(ncid)%variables(varid)%name, value, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, temporary, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(temporary) /= 1) then
+                    call status%set(NF90_EINVAL, "variable is not scalar")
+                else
+                    call convert_r64_to_i32(temporary(1), value, status)
+                end if
+            end if
         else
             call files(ncid)%read_i32_scalar(files(ncid)%variables(varid)%name, value, status)
         end if
@@ -723,20 +734,37 @@ contains
         integer(int32), intent(out) :: value(:)
         integer, intent(in), optional :: start(:), count(:)
         integer(int32), allocatable :: temporary(:)
+        real(real64), allocatable :: numeric(:)
         type(fortio_status_t) :: status
         integer :: first(1), last(1)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_i32_1( &
-                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, numeric, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(source_shape) /= 1) then
+                    call status%set(NF90_EINVAL, "variable rank does not match rank 1")
+                else
+                    allocate(temporary(size(numeric)))
+                    call convert_r64_array_to_i32(numeric, temporary, status)
+                end if
+            end if
         else
+            source_shape = int(files(ncid)%variable_shape(varid))
+            if (size(source_shape) /= 1) &
+                call status%set(NF90_EINVAL, "variable rank does not match rank 1")
+            if (.not. status%ok()) then
+                code = finish_status(status)
+                return
+            end if
             call files(ncid)%read_i32_1(files(ncid)%variables(varid)%name, temporary, status)
         end if
-        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+        if (status%ok()) call resolve_slice(source_shape, shape(value), start, count, &
             first, last, status)
         if (status%ok()) value = temporary(first(1):last(1))
         code = finish_status(status)
@@ -746,14 +774,23 @@ contains
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value
         type(fortio_status_t) :: status
+        real(real64), allocatable :: temporary(:)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_r64_scalar( &
-                netcdf4_files(ncid)%variables(varid)%name, value, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, temporary, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(temporary) /= 1) then
+                    call status%set(NF90_EINVAL, "variable is not scalar")
+                else
+                    value = temporary(1)
+                end if
+            end if
         else
             call files(ncid)%read_r64_scalar(files(ncid)%variables(varid)%name, value, status)
         end if
@@ -767,18 +804,30 @@ contains
         real(real64), allocatable :: temporary(:), mapped(:)
         type(fortio_status_t) :: status
         integer :: first(1), last(1)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_r64_1( &
-                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, temporary, &
+                source_shape, status)
         else
+            source_shape = int(files(ncid)%variable_shape(varid))
+            if (size(source_shape) /= 1) &
+                call status%set(NF90_EINVAL, "variable rank does not match rank 1")
+            if (.not. status%ok()) then
+                code = finish_status(status)
+                return
+            end if
             call files(ncid)%read_r64_1(files(ncid)%variables(varid)%name, temporary, status)
         end if
-        if (status%ok()) call resolve_slice(shape(temporary), shape(value), start, count, &
+        if (status%ok()) then
+            if (size(source_shape) /= 1) &
+                call status%set(NF90_EINVAL, "variable rank does not match rank 1")
+        end if
+        if (status%ok()) call resolve_slice(source_shape, shape(value), start, count, &
             first, last, status, map)
         if (status%ok()) then
             if (present(map)) then
@@ -796,9 +845,10 @@ contains
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :)
         integer, intent(in), optional :: start(:), count(:), map(:)
-        real(real64), allocatable :: temporary(:, :), selected(:, :), mapped(:)
+        real(real64), allocatable :: temporary(:, :), selected(:, :), mapped(:), flat(:)
         type(fortio_status_t) :: status
         integer :: first(2), last(2)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
@@ -813,8 +863,16 @@ contains
             end if
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_r64_2( &
-                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, flat, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(source_shape) /= 2) then
+                    call status%set(NF90_EINVAL, "variable rank does not match rank 2")
+                else
+                    allocate(temporary(source_shape(1), source_shape(2)))
+                    temporary = reshape(flat, [source_shape(1), source_shape(2)])
+                end if
+            end if
         else
             call files(ncid)%read_r64_2(files(ncid)%variables(varid)%name, temporary, status)
         end if
@@ -837,17 +895,27 @@ contains
         integer, intent(in) :: ncid, varid
         real(real64), intent(out) :: value(:, :, :)
         integer, intent(in), optional :: start(:), count(:), map(:)
-        real(real64), allocatable :: temporary(:, :, :), selected(:, :, :), mapped(:)
+        real(real64), allocatable :: temporary(:, :, :), selected(:, :, :), mapped(:), flat(:)
         type(fortio_status_t) :: status
         integer :: first(3), last(3)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_r64_3( &
-                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, flat, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(source_shape) /= 3) then
+                    call status%set(NF90_EINVAL, "variable rank does not match rank 3")
+                else
+                    allocate(temporary(source_shape(1), source_shape(2), source_shape(3)))
+                    temporary = reshape(flat, [source_shape(1), source_shape(2), &
+                        source_shape(3)])
+                end if
+            end if
         else
             call files(ncid)%read_r64_3(files(ncid)%variables(varid)%name, temporary, status)
         end if
@@ -873,17 +941,28 @@ contains
         real(real64), intent(out) :: value(:, :, :, :)
         integer, intent(in), optional :: start(:), count(:), map(:)
         real(real64), allocatable :: temporary(:, :, :, :), selected(:, :, :, :)
-        real(real64), allocatable :: mapped(:)
+        real(real64), allocatable :: mapped(:), flat(:)
         type(fortio_status_t) :: status
         integer :: first(4), last(4)
+        integer, allocatable :: source_shape(:)
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
         if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%read_r64_4( &
-                netcdf4_files(ncid)%variables(varid)%name, temporary, status)
+            call read_netcdf4_r64_flat(netcdf4_files(ncid), varid, flat, &
+                source_shape, status)
+            if (status%ok()) then
+                if (size(source_shape) /= 4) then
+                    call status%set(NF90_EINVAL, "variable rank does not match rank 4")
+                else
+                    allocate(temporary(source_shape(1), source_shape(2), &
+                        source_shape(3), source_shape(4)))
+                    temporary = reshape(flat, [source_shape(1), source_shape(2), &
+                        source_shape(3), source_shape(4)])
+                end if
+            end if
         else
             call files(ncid)%read_r64_4(files(ncid)%variables(varid)%name, temporary, status)
         end if
@@ -903,6 +982,53 @@ contains
         end if
         code = finish_status(status)
     end function get_r64_rank4
+
+    subroutine read_netcdf4_r64_flat(file, varid, values, source_shape, status)
+        type(netcdf4_file_t), intent(inout) :: file
+        integer, intent(in) :: varid
+        real(real64), allocatable, intent(out) :: values(:)
+        integer, allocatable, intent(out) :: source_shape(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int64), allocatable :: dimensions(:)
+        logical :: is_group
+        integer :: element_size, type_class
+
+        call file%hdf5%describe(file%variables(varid)%name, is_group, type_class, &
+            dimensions, status, element_size)
+        if (.not. status%ok()) return
+        if (is_group) then
+            call status%set(NF90_EINVAL, "numeric variable is a group")
+            return
+        end if
+        source_shape = int(dimensions(size(dimensions):1:-1))
+        call file%hdf5%read_numeric_r64_flat(file%variables(varid)%name, values, status)
+    end subroutine read_netcdf4_r64_flat
+
+    subroutine convert_r64_array_to_i32(values, converted, status)
+        real(real64), intent(in) :: values(:)
+        integer(int32), intent(out) :: converted(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+
+        do i = 1, size(values)
+            call convert_r64_to_i32(values(i), converted(i), status)
+            if (.not. status%ok()) return
+        end do
+    end subroutine convert_r64_array_to_i32
+
+    subroutine convert_r64_to_i32(value, converted, status)
+        real(real64), intent(in) :: value
+        integer(int32), intent(out) :: converted
+        type(fortio_status_t), intent(inout) :: status
+        real(real64), parameter :: minimum = real(-huge(0_int32) - 1_int32, real64)
+        real(real64), parameter :: maximum = real(huge(0_int32), real64)
+
+        if (.not. ieee_is_finite(value) .or. value < minimum .or. value > maximum) then
+            call status%set(FORTIO_ERANGE, "numeric value is outside integer range")
+            return
+        end if
+        converted = int(value, int32)
+    end subroutine convert_r64_to_i32
 
     integer function put_i32_scalar(ncid, varid, value) result(code)
         integer, intent(in) :: ncid, varid
@@ -1076,6 +1202,8 @@ contains
             message = "Operation or format feature is not supported"
         case (NF90_EEXIST)
             message = "File already exists"
+        case (NF90_ERANGE)
+            message = "Numeric conversion not representable"
         case (FORTIO_EIO)
             message = "I/O error"
         case (FORTIO_EFORMAT)

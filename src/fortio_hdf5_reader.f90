@@ -42,6 +42,9 @@ module fortio_hdf5_reader
         integer :: type_class = -1
         integer :: element_size = 0
         logical :: little_endian = .true.
+        logical :: integer_signed = .true.
+        integer :: integer_offset = 0
+        integer :: integer_precision = 0
         integer(int64) :: data_address = -1_int64
         integer(int64) :: data_size = 0_int64
         integer :: filter_mask = 0
@@ -77,6 +80,7 @@ module fortio_hdf5_reader
         procedure :: read_r64_3 => hdf5_read_r64_3
         procedure :: read_r64_4 => hdf5_read_r64_4
         procedure :: read_r64_5 => hdf5_read_r64_5
+        procedure :: read_numeric_r64_flat => hdf5_read_numeric_r64_flat
         procedure :: read_c64_1 => hdf5_read_c64_1
         procedure :: read_c64_2 => hdf5_read_c64_2
         procedure :: read_c64_3 => hdf5_read_c64_3
@@ -276,6 +280,10 @@ contains
 
         call find_dataset(this, path, dataset, status)
         if (.not. status%ok()) return
+        if (.not. allocated(dataset%dimensions)) then
+            call status%set(FORTIO_ETYPE, "integer object is a group")
+            return
+        end if
         if (size(dataset%dimensions) /= 1) then
             call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 1")
             return
@@ -330,10 +338,15 @@ contains
         integer(int64), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
         type(hdf5_dataset_t) :: dataset
+        integer(int8), allocatable :: bytes(:)
         integer :: i
 
         call find_dataset(this, path, dataset, status)
         if (.not. status%ok()) return
+        if (.not. allocated(dataset%dimensions)) then
+            call status%set(FORTIO_ETYPE, "64-bit integer object is a group")
+            return
+        end if
         if (size(dataset%dimensions) /= 1) then
             call status%set(FORTIO_ESHAPE, "64-bit integer dataset is not rank 1")
             return
@@ -342,11 +355,18 @@ contains
             call status%set(FORTIO_ETYPE, "dataset is not a 64-bit integer")
             return
         end if
+        if (.not. dataset%integer_signed .or. dataset%integer_offset /= 0 .or. &
+            dataset%integer_precision /= 64) then
+            call status%set(FORTIO_ENOTSUP, &
+                "64-bit integer datatype is not a canonical signed integer")
+            return
+        end if
         allocate(values(dataset%dimensions(1)))
-        call this%reader%seek(this%base_address + dataset%data_address + 1)
+        call read_dataset_bytes(this, dataset, bytes, status)
+        if (.not. status%ok()) return
         do i = 1, size(values)
-            call this%reader%read_le_i64(values(i), status)
-            if (.not. status%ok()) return
+            values(i) = decode_signed_integer(bytes(8*i - 7:8*i), &
+                dataset%little_endian)
         end do
     end subroutine hdf5_read_i64_1
 
@@ -364,6 +384,12 @@ contains
         if (.not. status%ok()) return
         if (dataset%type_class /= H5_TYPE_INTEGER .or. dataset%element_size /= 4) then
             call status%set(FORTIO_ETYPE, "dataset is not a 32-bit integer")
+            return
+        end if
+        if (.not. dataset%integer_signed .or. dataset%integer_offset /= 0 .or. &
+            dataset%integer_precision /= 32) then
+            call status%set(FORTIO_ENOTSUP, &
+                "32-bit integer datatype is not a canonical signed integer")
             return
         end if
         count = product(dataset%dimensions)
@@ -594,6 +620,10 @@ contains
         type(fortio_status_t), intent(inout) :: status
 
         call status%clear()
+        if (dataset%type_class /= H5_TYPE_FLOAT) then
+            call status%set(FORTIO_ETYPE, "dataset is not floating point")
+            return
+        end if
         if (size(dataset%dimensions) /= 2) then
             call status%set(FORTIO_ESHAPE, "dataset rank does not match rank 2")
             return
@@ -684,6 +714,98 @@ contains
         allocate(values(count))
         call read_r64_values(this, dataset, values, status)
     end subroutine read_r64_flat
+
+    subroutine hdf5_read_numeric_r64_flat(this, path, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), allocatable, intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer(int64) :: count
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (.not. allocated(dataset%dimensions)) then
+            call status%set(FORTIO_ETYPE, "numeric HDF5 object is a group")
+            return
+        end if
+        count = product(dataset%dimensions)
+        allocate(values(count))
+        select case (dataset%type_class)
+        case (H5_TYPE_FLOAT)
+            call read_r64_values(this, dataset, values, status)
+        case (H5_TYPE_INTEGER)
+            call read_integer_r64_values(this, dataset, values, status)
+        case default
+            call status%set(FORTIO_ETYPE, "dataset is not numeric")
+        end select
+    end subroutine hdf5_read_numeric_r64_flat
+
+    subroutine read_integer_r64_values(this, dataset, values, status)
+        class(hdf5_file_t), intent(inout) :: this
+        type(hdf5_dataset_t), intent(in) :: dataset
+        real(real64), intent(out) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+        integer(int64) :: signed_value
+        real(real64) :: value
+        integer :: byte_index, i, j
+
+        if (dataset%element_size < 1 .or. dataset%element_size > 8) then
+            call status%set(FORTIO_ETYPE, "integer width is not supported")
+            return
+        end if
+        if (dataset%integer_offset /= 0 .or. &
+            dataset%integer_precision /= 8*dataset%element_size) then
+            call status%set(FORTIO_ENOTSUP, &
+                "noncanonical HDF5 fixed-point integers are not supported")
+            return
+        end if
+        call read_dataset_bytes(this, dataset, bytes, status)
+        if (.not. status%ok()) return
+        do i = 1, size(values)
+            if (dataset%integer_signed) then
+                signed_value = decode_signed_integer( &
+                    bytes((i - 1)*dataset%element_size + 1:i*dataset%element_size), &
+                    dataset%little_endian)
+                values(i) = real(signed_value, real64)
+            else
+                value = 0.0_real64
+                do j = dataset%element_size, 1, -1
+                    if (dataset%little_endian) then
+                        byte_index = (i - 1)*dataset%element_size + j
+                    else
+                        byte_index = (i - 1)*dataset%element_size + &
+                            dataset%element_size - j + 1
+                    end if
+                    value = 256.0_real64*value + &
+                        real(byte_value(bytes(byte_index)), real64)
+                end do
+                values(i) = value
+            end if
+        end do
+    end subroutine read_integer_r64_values
+
+    pure integer(int64) function decode_signed_integer(bytes, little_endian) result(value)
+        integer(int8), intent(in) :: bytes(:)
+        logical, intent(in) :: little_endian
+        integer :: i, position
+
+        value = 0_int64
+        do i = 1, size(bytes)
+            if (little_endian) then
+                position = i - 1
+            else
+                position = size(bytes) - i
+            end if
+            value = ior(value, shiftl(iand(int(bytes(i), int64), 255_int64), &
+                8*position))
+        end do
+        if (size(bytes) < 8) then
+            if (btest(value, 8*size(bytes) - 1)) &
+                value = value - shiftl(1_int64, 8*size(bytes))
+        end if
+    end function decode_signed_integer
 
     subroutine read_r64_values(this, dataset, values, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -1891,6 +2013,7 @@ contains
         type(hdf5_dataset_t), intent(inout) :: dataset
         type(fortio_status_t), intent(inout) :: status
         integer(int8) :: class_version, class_bits(3)
+        integer(int16) :: integer_offset_i16, integer_precision_i16
         integer(int32) :: size_value
 
         call this%reader%read_i8(class_version, status)
@@ -1900,6 +2023,14 @@ contains
         dataset%type_class = iand(byte_value(class_version), 15)
         dataset%element_size = size_value
         dataset%little_endian = .not. btest(byte_value(class_bits(1)), 0)
+        dataset%integer_signed = btest(byte_value(class_bits(1)), 3)
+        if (dataset%type_class == H5_TYPE_INTEGER) then
+            call this%reader%read_le_i16(integer_offset_i16, status)
+            call this%reader%read_le_i16(integer_precision_i16, status)
+            if (.not. status%ok()) return
+            dataset%integer_offset = iand(int(integer_offset_i16), int(z'ffff'))
+            dataset%integer_precision = iand(int(integer_precision_i16), int(z'ffff'))
+        end if
         if (dataset%type_class /= H5_TYPE_INTEGER .and. &
             dataset%type_class /= H5_TYPE_FLOAT .and. &
             dataset%type_class /= H5_TYPE_STRING .and. &

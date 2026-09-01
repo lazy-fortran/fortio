@@ -36,6 +36,7 @@ module fortio
         procedure :: read_r64_3 => file_read_r64_3
         procedure :: read_r64_4 => file_read_r64_4
         procedure :: read_r64_5 => file_read_r64_5
+        procedure :: read_numeric_r64_flat => file_read_numeric_r64_flat
         procedure :: read_c64_1 => file_read_c64_1
         procedure :: read_c64_2 => file_read_c64_2
         procedure :: read_c64_3 => file_read_c64_3
@@ -60,6 +61,19 @@ module fortio
     public :: zip_writer_t
 
 contains
+
+    subroutine file_read_numeric_r64_flat(this, path, value, status)
+        class(fortio_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        real(real64), allocatable, intent(out) :: value(:)
+        type(fortio_status_t), intent(inout) :: status
+
+        if (this%format /= FORMAT_HDF5) then
+            call status%set(FORTIO_ENOTSUP, "numeric HDF5 conversion requires HDF5")
+            return
+        end if
+        call this%hdf5%read_numeric_r64_flat(path, value, status)
+    end subroutine file_read_numeric_r64_flat
 
     subroutine file_read_i64_1(this, path, value, status)
         class(fortio_file_t), intent(inout) :: this

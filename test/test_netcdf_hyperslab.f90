@@ -1,12 +1,14 @@
 program test_netcdf_hyperslab
     use, intrinsic :: iso_fortran_env, only: real64
-    use netcdf, only: NF90_NOERR, NF90_NOWRITE, nf90_close, nf90_get_var, &
+    use netcdf, only: NF90_EINVAL, NF90_ERANGE, NF90_NOERR, NF90_NOWRITE, &
+        nf90_close, nf90_get_var, &
         nf90_inq_varid, nf90_open
     implicit none
 
     character(len=1024) :: fixture, cdl, command
-    integer :: ncid, varid, command_status
-    real(real64) :: slab(2, 2, 1), vector(2), rank4_slab(2, 1, 2, 1)
+    integer :: ncid, varid, command_status, converted_vector(3), converted_scalar
+    real(real64) :: scalar, flattened(6), slab(2, 2, 1), vector(2), &
+        rank4_slab(2, 1, 2, 1)
     real(real64) :: mapped_matrix(2, 3), mapped_cube(2, 2, 3)
 
     call get_command_argument(1, fixture)
@@ -30,9 +32,38 @@ program test_netcdf_hyperslab
         error stop "rank-1 hyperslab read failed"
     if (any(abs(vector - [-2.5_real64, 4.75_real64]) > 1.0e-12_real64)) &
         error stop "rank-1 hyperslab differs from ncgen oracle"
+    if (nf90_get_var(ncid, varid, converted_vector) /= NF90_NOERR) &
+        error stop "double-to-integer conversion failed"
+    if (any(converted_vector /= [1, -2, 4])) &
+        error stop "double-to-integer conversion differs from native NetCDF"
+
+    if (nf90_inq_varid(ncid, "scalar", varid) /= NF90_NOERR) &
+        error stop "scalar lookup failed"
+    if (nf90_get_var(ncid, varid, scalar) /= NF90_NOERR) &
+        error stop "integer-to-double conversion failed"
+    if (scalar /= 42.0_real64) &
+        error stop "integer-to-double conversion differs from ncgen oracle"
+    if (nf90_inq_varid(ncid, "small_byte", varid) /= NF90_NOERR) &
+        error stop "byte lookup failed"
+    if (nf90_get_var(ncid, varid, scalar) /= NF90_NOERR) &
+        error stop "byte-to-double conversion failed"
+    if (scalar /= -7.0_real64) &
+        error stop "byte-to-double conversion differs from native NetCDF"
+    if (nf90_inq_varid(ncid, "small_short", varid) /= NF90_NOERR) &
+        error stop "short lookup failed"
+    if (nf90_get_var(ncid, varid, scalar) /= NF90_NOERR) &
+        error stop "short-to-double conversion failed"
+    if (scalar /= 1234.0_real64) &
+        error stop "short-to-double conversion differs from native NetCDF"
+    if (nf90_inq_varid(ncid, "huge_value", varid) /= NF90_NOERR) &
+        error stop "huge-value lookup failed"
+    if (nf90_get_var(ncid, varid, converted_scalar) /= NF90_ERANGE) &
+        error stop "out-of-range conversion did not return NF90_ERANGE"
 
     if (nf90_inq_varid(ncid, "matrix", varid) /= NF90_NOERR) &
         error stop "matrix lookup failed"
+    if (nf90_get_var(ncid, varid, flattened) /= NF90_EINVAL) &
+        error stop "rank-2 variable was accepted by rank-1 getter"
     if (nf90_get_var(ncid, varid, mapped_matrix, count=[3, 2], map=[2, 1]) /= &
         NF90_NOERR) error stop "rank-2 mapped read failed"
     if (any(mapped_matrix /= reshape([1, 4, 2, 5, 3, 6], shape(mapped_matrix)))) &
