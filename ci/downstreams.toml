@@ -1,0 +1,34 @@
+[[consumer]]
+name = "libneo"
+repository = "https://github.com/itpplasma/libneo.git"
+revision = "f1bef44e80c4508f04594d4d2ca120eaf17564f8"
+packages = [
+  "cmake", "gfortran", "git", "hdf5-tools", "libfftw3-dev", "libgsl-dev",
+  "liblapack-dev", "libnetcdf-dev", "libopenblas-dev", "libopenmpi-dev",
+  "netcdf-bin", "ninja-build", "openmpi-bin", "pkg-config", "python3-numpy",
+]
+configure = ["cmake", "-S", "{checkout}", "-B", "{build}", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DLIBNEO_BUILD_TESTING=ON", "-DFETCHCONTENT_SOURCE_DIR_FORTIO={fortio}"]
+cmake_cache = "{build}/CMakeCache.txt"
+commands = [
+  ["cmake", "--build", "{build}", "--parallel"],
+  ["ctest", "--test-dir", "{build}", "--output-on-failure", "--no-tests=error"],
+]
+
+[[consumer]]
+name = "neo2"
+repository = "https://github.com/itpplasma/NEO-2.git"
+revision = "a46f0e6408f9473fca6d727d4e14c21da0921754"
+packages = [
+  "cmake", "g++", "gcc", "gfortran", "git", "jq", "libevent-dev",
+  "libfftw3-dev", "libgsl-dev", "libhwloc-dev", "liblapack-dev",
+  "libltdl-dev", "libnetcdf-dev", "libnetcdff-dev", "libnl-3-dev",
+  "libnl-route-3-dev", "libnuma-dev", "libopenblas-dev", "libopenmpi-dev",
+  "libsuitesparse-dev", "make", "ninja-build", "openmpi-bin", "pkg-config",
+  "python3-h5py", "python3-matplotlib", "python3-numpy", "python3-scipy",
+]
+configure = ["cmake", "--preset", "default", "-DCMAKE_BUILD_TYPE=Release", "-DFETCHCONTENT_SOURCE_DIR_FORTIO={fortio}"]
+cmake_cache = "{checkout}/build/CMakeCache.txt"
+commands = [
+  ["cmake", "--build", "--preset", "default", "--parallel"],
+  ["ctest", "--test-dir", "build/TEST", "--output-on-failure", "--no-tests=error"],
+]
