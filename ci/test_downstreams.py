@@ -113,6 +113,12 @@ def run_consumer(consumer: dict[str, object], workspace: Path) -> None:
     }
     environment = os.environ.copy()
     environment["PIP_NO_CACHE_DIR"] = "1"
+    python_source = checkout / "python"
+    if python_source.is_dir():
+        previous_pythonpath = environment.get("PYTHONPATH", "")
+        environment["PYTHONPATH"] = str(python_source)
+        if previous_pythonpath:
+            environment["PYTHONPATH"] += f":{previous_pythonpath}"
     python_packages = consumer.get("python_packages", [])
     if python_packages:
         virtualenv = workspace / f"{name}-venv"
