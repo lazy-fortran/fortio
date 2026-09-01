@@ -5,12 +5,16 @@ revision = "f1bef44e80c4508f04594d4d2ca120eaf17564f8"
 packages = [
   "cmake", "gfortran", "git", "hdf5-tools", "libfftw3-dev", "libgsl-dev",
   "liblapack-dev", "libnetcdf-dev", "libopenblas-dev", "libopenmpi-dev",
-  "netcdf-bin", "ninja-build", "openmpi-bin", "pkg-config", "python3-numpy",
+  "netcdf-bin", "ninja-build", "openmpi-bin", "pkg-config", "python3-venv",
+]
+python_packages = [
+  "booz-xform", "h5py", "map2disc@git+https://github.com/itpplasma/map2disc.git",
+  "matplotlib", "netCDF4", "numpy", "pytest", "scipy", "shapely", "trimesh",
 ]
 configure = ["cmake", "-S", "{checkout}", "-B", "{build}", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DLIBNEO_BUILD_TESTING=ON", "-DFETCHCONTENT_SOURCE_DIR_FORTIO={fortio}"]
 cmake_cache = "{build}/CMakeCache.txt"
 commands = [
-  ["cmake", "--build", "{build}", "--parallel"],
+  ["cmake", "--build", "{build}", "--parallel", "2"],
   ["ctest", "--test-dir", "{build}", "--output-on-failure", "--no-tests=error"],
 ]
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -38,6 +39,13 @@ def load_consumers() -> dict[str, dict[str, object]]:
             isinstance(package, str) and package for package in packages
         ):
             raise ValueError(f"consumer {name!r} packages must be non-empty strings")
+        python_packages = consumer.get("python_packages", [])
+        if not isinstance(python_packages, list) or not all(
+            isinstance(package, str) and package for package in python_packages
+        ):
+            raise ValueError(
+                f"consumer {name!r} python_packages must be non-empty strings"
+            )
         format_command(consumer["configure"], {})
         for command in consumer["commands"]:
             format_command(command, {})
@@ -58,10 +66,12 @@ def format_command(command: list[str], paths: dict[str, str]) -> list[str]:
         raise ValueError(f"unknown command placeholder {error.args[0]!r}") from error
 
 
-def run_command(raw_command: list[str], paths: dict[str, str], checkout: Path) -> None:
+def run_command(
+    raw_command: list[str], paths: dict[str, str], checkout: Path, environment: dict[str, str]
+) -> None:
     command = format_command(raw_command, paths)
     print("+ " + " ".join(command), flush=True)
-    subprocess.run(command, cwd=checkout, check=True)
+    subprocess.run(command, cwd=checkout, env=environment, check=True)
 
 
 def verify_candidate(cache_template: str, paths: dict[str, str]) -> None:
@@ -101,10 +111,24 @@ def run_consumer(consumer: dict[str, object], workspace: Path) -> None:
         "fortio": str(ROOT),
         "workspace": str(workspace),
     }
-    run_command(consumer["configure"], paths, checkout)
+    environment = os.environ.copy()
+    environment["PIP_NO_CACHE_DIR"] = "1"
+    python_packages = consumer.get("python_packages", [])
+    if python_packages:
+        virtualenv = workspace / f"{name}-venv"
+        subprocess.run(["python3", "-m", "venv", str(virtualenv)], check=True)
+        python = virtualenv / "bin" / "python"
+        environment["PATH"] = f"{virtualenv / 'bin'}:{environment['PATH']}"
+        constraints = checkout / "constraints" / "ci-python.txt"
+        install = [str(python), "-m", "pip", "install"]
+        if constraints.is_file():
+            install.extend(["-c", str(constraints)])
+        subprocess.run(install + list(python_packages), cwd=checkout, check=True)
+
+    run_command(consumer["configure"], paths, checkout, environment)
     verify_candidate(str(consumer["cmake_cache"]), paths)
     for raw_command in consumer["commands"]:
-        run_command(raw_command, paths, checkout)
+        run_command(raw_command, paths, checkout, environment)
 
 
 def parse_args() -> argparse.Namespace:
