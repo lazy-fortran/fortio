@@ -256,6 +256,13 @@ if(FORTIO_BUILD_TESTING)
         "$<TARGET_FILE:test_hdf5_deferred_abort>"
         "${CMAKE_CURRENT_BINARY_DIR}/hdf5-deferred-abort.h5")
 
+    add_executable(test_hdf5_deferred_reopen test/test_hdf5_deferred_reopen.f90)
+    target_link_libraries(test_hdf5_deferred_reopen PRIVATE fortio)
+    add_test(NAME hdf5_deferred_reopen COMMAND python3
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_hdf5_deferred_reopen.py"
+        "$<TARGET_FILE:test_hdf5_deferred_reopen>"
+        "${CMAKE_CURRENT_BINARY_DIR}/hdf5-deferred-reopen")
+
     add_executable(test_thread_safety test/test_thread_safety.f90)
     target_link_libraries(test_thread_safety PRIVATE fortio OpenMP::OpenMP_Fortran)
     add_test(NAME thread_safety COMMAND test_thread_safety
