@@ -24,5 +24,13 @@ Tests must compare behavior with an independent reader, writer, specification
 fixture, or mathematical oracle. A test that merely restates Fortio's own
 internal representation is not sufficient.
 
+Run an ordinary pinned consumer suite against the current checkout with:
+
+```sh
+python3 ci/test_downstreams.py libneo
+```
+
+The harness neither modifies the consumer nor changes its dependency pin.
+
 Pages are built in a runner temporary directory. Pull requests validate the
 site without deploying it; pushes to `main` deploy the generated artifact.

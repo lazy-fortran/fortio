@@ -9,12 +9,23 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  downstream-registry:
-    runs-on: ubuntu-latest
+  downstream:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - run: python3 ci/check_downstreams.py
+      - name: Install consumer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            $(python3 ci/test_downstreams.py --packages)
+      - name: Run ordinary consumer test suite
+        run: python3 ci/test_downstreams.py
 
   gfortran:
     runs-on: ubuntu-latest
