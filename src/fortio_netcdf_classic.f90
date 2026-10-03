@@ -1,8 +1,9 @@
 module fortio_netcdf_classic
-    use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_bytes, only: byte_reader_t
     use fortio_status, only: fortio_status_t, FORTIO_EFORMAT, FORTIO_ENOTFOUND, &
-        FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_ETYPE
+        FORTIO_ENOTSUP, FORTIO_ERANGE, FORTIO_ESHAPE, FORTIO_ETYPE
     implicit none
     private
 
@@ -197,6 +198,10 @@ contains
         character(len=*), intent(in) :: name
         integer(int32), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: value_i8
+        integer(int16) :: value_i16
+        real(real32) :: value_r32
+        real(real64) :: value_r64
         integer :: variable_id, i
 
         call status%clear()
@@ -205,17 +210,44 @@ contains
             call status%set(FORTIO_ENOTFOUND, "variable not found: "//trim(name))
             return
         end if
-        if (this%variables(variable_id)%type_code /= NC_INT) then
-            call status%set(FORTIO_ETYPE, "variable is not a 32-bit integer")
-            return
-        end if
         allocate(values(this%variables(variable_id)%element_count))
         call seek_variable(this, variable_id, status)
         if (.not. status%ok()) return
-        do i = 1, size(values)
-            call this%reader%read_be_i32(values(i), status)
-            if (.not. status%ok()) return
-        end do
+        select case (this%variables(variable_id)%type_code)
+        case (NC_BYTE)
+            do i = 1, size(values)
+                call this%reader%read_i8(value_i8, status)
+                if (.not. status%ok()) return
+                values(i) = int(value_i8, int32)
+            end do
+        case (NC_SHORT)
+            do i = 1, size(values)
+                call this%reader%read_be_i16(value_i16, status)
+                if (.not. status%ok()) return
+                values(i) = int(value_i16, int32)
+            end do
+        case (NC_INT)
+            do i = 1, size(values)
+                call this%reader%read_be_i32(values(i), status)
+                if (.not. status%ok()) return
+            end do
+        case (NC_FLOAT)
+            do i = 1, size(values)
+                call this%reader%read_be_r32(value_r32, status)
+                if (.not. status%ok()) return
+                call convert_r64_to_i32(real(value_r32, real64), values(i), status)
+                if (.not. status%ok()) return
+            end do
+        case (NC_DOUBLE)
+            do i = 1, size(values)
+                call this%reader%read_be_r64(value_r64, status)
+                if (.not. status%ok()) return
+                call convert_r64_to_i32(value_r64, values(i), status)
+                if (.not. status%ok()) return
+            end do
+        case default
+            call status%set(FORTIO_ETYPE, "variable cannot be converted to integer")
+        end select
     end subroutine classic_read_i32_1
 
     subroutine classic_read_char_scalar(this, name, value, status)
@@ -429,12 +461,26 @@ contains
         type(fortio_status_t), intent(inout) :: status
         integer :: i
         real(real32) :: value_r32
+        integer(int8) :: value_i8
+        integer(int16) :: value_i16
         integer(int32) :: value_i32
 
         call status%clear()
         call seek_variable(this, variable_id, status)
         if (.not. status%ok()) return
         select case (this%variables(variable_id)%type_code)
+        case (NC_BYTE)
+            do i = 1, size(values)
+                call this%reader%read_i8(value_i8, status)
+                if (.not. status%ok()) return
+                values(i) = real(value_i8, real64)
+            end do
+        case (NC_SHORT)
+            do i = 1, size(values)
+                call this%reader%read_be_i16(value_i16, status)
+                if (.not. status%ok()) return
+                values(i) = real(value_i16, real64)
+            end do
         case (NC_DOUBLE)
             call this%reader%read_be_r64_array(values, status)
         case (NC_FLOAT)
@@ -453,6 +499,20 @@ contains
             call status%set(FORTIO_ETYPE, "variable cannot be converted to real64")
         end select
     end subroutine read_r64_values
+
+    subroutine convert_r64_to_i32(value, converted, status)
+        real(real64), intent(in) :: value
+        integer(int32), intent(out) :: converted
+        type(fortio_status_t), intent(inout) :: status
+        real(real64), parameter :: minimum = real(-huge(0_int32) - 1_int32, real64)
+        real(real64), parameter :: maximum = real(huge(0_int32), real64)
+
+        if (.not. ieee_is_finite(value) .or. value < minimum .or. value > maximum) then
+            call status%set(FORTIO_ERANGE, "numeric value is outside integer range")
+            return
+        end if
+        converted = int(value, int32)
+    end subroutine convert_r64_to_i32
 
     subroutine read_dimensions(this, status)
         class(classic_file_t), intent(inout) :: this

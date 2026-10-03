@@ -9,20 +9,31 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  downstream-registry:
-    runs-on: ubuntu-latest
+  downstream:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - run: python3 ci/check_downstreams.py
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install consumer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            $(python3 ci/test_downstreams.py --packages)
+      - name: Run ordinary consumer test suite
+        run: python3 ci/test_downstreams.py
 
   gfortran:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and independent format oracles
         run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
-      - uses: fortran-lang/setup-fpm@597c61f30fb11079835df98584f1fc3608385bee # v7
+      - uses: fortran-lang/setup-fpm@a03b5f81f16417c937a31b745eeb866c5a26a7a0 # v10
       - name: Build
         run: fpm build
       - name: Test
@@ -31,7 +42,7 @@ jobs:
   cmake:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and independent format oracles
         run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
       - name: Configure
@@ -51,7 +62,7 @@ jobs:
   native-performance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and native comparison libraries
         run: >
           sudo apt-get update &&
@@ -89,7 +100,7 @@ jobs:
   thread-sanitizer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and independent format oracles
         run: >
           sudo apt-get update &&
@@ -111,9 +122,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install GNU Fortran
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: UCRT64
           update: true

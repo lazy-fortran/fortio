@@ -34,11 +34,27 @@ with h5py.File(sys.argv[1], "w", libver="latest", track_order=True) as handle:
         "int_cube",
         data=np.arange(1, 13, dtype=np.int32).reshape(2, 2, 3),
     )
+    integer_ranks.create_dataset("int_scalar", data=np.int32(-17))
+    integer_ranks.create_dataset(
+        "int_matrix_as_real",
+        data=np.arange(-3, 3, dtype=np.int32).reshape(2, 3),
+    )
+    integer_ranks.create_dataset(
+        "int64_big_endian",
+        data=np.array([-1, -17, 1, np.iinfo(np.int64).max], dtype=">i8"),
+    )
+    integer_ranks.create_dataset(
+        "int64_filtered",
+        data=np.array([-9, 0, 23], dtype=np.int64),
+        compression="gzip",
+        shuffle=True,
+    )
     real_ranks = handle.create_group("real_ranks")
     real_ranks.create_dataset(
         "rank4",
         data=np.arange(1, 13, dtype=np.float64).reshape(2, 1, 2, 3),
     )
+    real_ranks.create_dataset("huge_for_integer", data=np.float64(1.0e300))
     real_ranks.create_dataset(
         "real_cube",
         data=np.arange(1, 13, dtype=np.float64).reshape(2, 2, 3),

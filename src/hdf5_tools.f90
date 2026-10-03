@@ -1,9 +1,10 @@
 module hdf5_tools
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_c_binding, only: c_int, c_null_char, c_size_t
     use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
     use fortio, only: fortio_file_t, hdf5_attribute_t
     use fortio_hdf5_writer, only: hdf5_writer_t
-    use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP
+    use fortio_status, only: fortio_status_t, FORTIO_ENOTSUP, FORTIO_ETYPE
     use fortio_posix, only: handle_table_lock, handle_table_unlock, posix_path_exists, &
         write_session_lock, write_session_unlock
     implicit none
@@ -25,6 +26,7 @@ module hdf5_tools
         integer :: used = 0
         integer :: row_count = 0
         integer :: column_limit = 0
+        logical :: dirty = .false.
         integer(int32), allocatable :: values_i32(:)
         real(real64), allocatable :: values_r64(:)
         real(real64), allocatable :: matrix_r64(:, :)
@@ -36,10 +38,21 @@ module hdf5_tools
     integer, save :: root_slot(MAX_OPEN_FILES) = 0
     logical, save :: root_handle(MAX_OPEN_FILES) = .false.
     logical, save :: read_shadow_open(MAX_OPEN_FILES) = .false.
+    logical, save :: write_dirty(MAX_OPEN_FILES) = .false.
     integer(c_int), save :: write_lock_token(MAX_OPEN_FILES) = -1_c_int
     character(len=1024), save :: handle_prefix(MAX_OPEN_FILES) = ""
     type(unlimited_buffer_t), save :: unlimited_buffers(MAX_OPEN_FILES)
     logical, save, public :: h5overwrite = .false.
+    ! Retained for source compatibility with applications that used the
+    ! deferred-writer optimization.  h5_close still checkpoints and closes
+    ! the file; the writer state remains available for a same-process reopen.
+    logical, save, public :: h5_defer_close = .false.
+    ! When enabled, the first open_rw of an existing path starts a fresh image
+    ! instead of loading every existing dataset into the writer.
+    logical, save, public :: h5_truncate_existing = .false.
+    ! When enabled, new dataset payloads are written directly to the output
+    ! file instead of being retained in the deferred writer image.
+    logical, save, public :: h5_stream_write = .false.
 
     interface h5_get
         module procedure h5_get_int
@@ -126,6 +139,7 @@ contains
 
     subroutine h5_deinit()
         integer :: slot
+        type(fortio_status_t) :: status
 
         do slot = 1, MAX_OPEN_FILES
             if (.not. in_use(slot) .or. .not. root_handle(slot)) cycle
@@ -133,6 +147,13 @@ contains
             if (handle_mode(slot) == MODE_WRITE) &
                 call write_session_unlock(write_lock_token(slot))
             call invalidate_root(slot)
+        end do
+        do slot = 1, MAX_OPEN_FILES
+            if (in_use(slot)) cycle
+            if (.not. allocated(writers(slot)%path)) cycle
+            if (.not. writers(slot)%pending_flush) cycle
+            call writers(slot)%flush(status)
+            call require_ok(status)
         end do
         call clear_nonpersistent_handles()
     end subroutine h5_deinit
@@ -157,10 +178,17 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
         integer(c_int) :: lock_token
+        integer :: fileformat_version
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
         slot = allocate_handle()
-        call writers(slot)%create(trim(filename), status)
+        call writers(slot)%create(trim(filename), status, h5_stream_write)
+        call require_ok(status)
+        fileformat_version = 1
+        if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+        call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+        call require_ok(status)
+        call checkpoint_stream_writer(slot, status)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
@@ -174,11 +202,61 @@ contains
         type(fortio_status_t) :: status
         integer :: slot
         integer(c_int) :: lock_token
+        integer :: fileformat_version
 
         lock_token = write_session_lock(trim(filename)//c_null_char)
+        ! A writer may have been closed in this process while retaining its
+        ! in-memory image. Check that state before the filesystem so repeated
+        ! open_rw calls do not reread the complete file.
+        slot = 0
+        if (h5_defer_close) slot = persistent_writer_slot(trim(filename))
+        if (slot > 0) then
+            call writers(slot)%reopen(trim(filename), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            h5id = int(slot, HID_T)
+            return
+        end if
         if (posix_path_exists(trim(filename)//c_null_char) == 0_c_int) then
             slot = allocate_handle()
-            call writers(slot)%create(trim(filename), status)
+            call writers(slot)%create(trim(filename), status, h5_stream_write)
+            call require_ok(status)
+            fileformat_version = 1
+            if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+            call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+            call require_ok(status)
+            call checkpoint_stream_writer(slot, status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            h5id = int(slot, HID_T)
+            return
+        end if
+        ! A writer that was closed in this process already owns the complete
+        ! file image. Reuse it instead of reading and copying the whole file
+        ! for every close/reopen update.
+        slot = persistent_writer_slot(trim(filename))
+        if (slot > 0) then
+            call files(slot)%open(trim(filename), status)
+            call require_ok(status)
+            call writers(slot)%reopen(trim(filename), status)
+            call require_ok(status)
+            call set_root_handle(slot, MODE_WRITE)
+            write_lock_token(slot) = lock_token
+            read_shadow_open(slot) = .true.
+            h5id = int(slot, HID_T)
+            return
+        end if
+        if (h5_truncate_existing) then
+            slot = allocate_handle()
+            call writers(slot)%create(trim(filename), status, h5_stream_write)
+            call require_ok(status)
+            fileformat_version = 1
+            if (present(opt_fileformat_version)) fileformat_version = opt_fileformat_version
+            call writers(slot)%add_i32_scalar("version", int(fileformat_version, int32), status)
+            call require_ok(status)
+            call checkpoint_stream_writer(slot, status)
             call require_ok(status)
             call set_root_handle(slot, MODE_WRITE)
             write_lock_token(slot) = lock_token
@@ -186,21 +264,11 @@ contains
             return
         end if
         slot = allocate_handle()
-        if (has_persistent_buffer(trim(filename))) then
-            if (allocated(writers(slot)%path)) then
-                if (writers(slot)%path == trim(filename)) then
-                    call writers(slot)%reopen(trim(filename), status)
-                    call require_ok(status)
-                    call set_root_handle(slot, MODE_WRITE)
-                    write_lock_token(slot) = lock_token
-                    h5id = int(slot, HID_T)
-                    return
-                end if
-            end if
-        end if
         call files(slot)%open(trim(filename), status)
         call require_ok(status)
-        call writers(slot)%create(trim(filename), status)
+        ! Copying an existing image must retain the conventional in-memory
+        ! writer: a streaming create would truncate the source before copy.
+        call writers(slot)%create(trim(filename), status, .false.)
         call require_ok(status)
         call set_root_handle(slot, MODE_WRITE)
         write_lock_token(slot) = lock_token
@@ -209,33 +277,47 @@ contains
         h5id = int(slot, HID_T)
     end subroutine h5_open_rw
 
-    logical function has_persistent_buffer(path) result(found)
+    integer function persistent_writer_slot(path) result(slot)
         character(len=*), intent(in) :: path
-        integer :: slot
+        integer :: candidate
 
-        found = .false.
+        slot = 0
         call handle_table_lock()
-        do slot = 1, MAX_OPEN_FILES
-            if (.not. in_use(slot)) cycle
-            if (handle_mode(slot) /= MODE_UNLIMITED) cycle
-            if (trim(unlimited_buffers(slot)%file_path) /= trim(path)) cycle
-            found = .true.
+        do candidate = 1, MAX_OPEN_FILES
+            if (in_use(candidate)) cycle
+            if (.not. allocated(writers(candidate)%path)) cycle
+            if (writers(candidate)%opened) cycle
+            if (trim(writers(candidate)%path) /= trim(path)) cycle
+            in_use(candidate) = .true.
+            slot = candidate
             exit
         end do
         call handle_table_unlock()
-    end function has_persistent_buffer
+    end function persistent_writer_slot
 
     subroutine h5_close(h5id)
         integer(HID_T), intent(inout) :: h5id
         integer :: slot
         logical :: writing
         integer(c_int) :: lock_token
+        type(fortio_status_t) :: status
 
         slot = require_id(h5id)
         if (.not. root_handle(slot)) error stop "h5_close requires a file identifier"
         writing = handle_mode(slot) == MODE_WRITE
         lock_token = write_lock_token(slot)
-        call close_root(slot)
+        if (writing .and. h5_defer_close .and. .not. writers(slot)%streaming) then
+            call flush_unlimited_buffers(slot)
+            if (read_shadow_open(slot)) then
+                call files(slot)%close(status)
+                call require_ok(status)
+                read_shadow_open(slot) = .false.
+            end if
+            call writers(slot)%suspend(status)
+            call require_ok(status)
+        else
+            call close_root(slot)
+        end if
         call invalidate_root(slot)
         if (writing) call write_session_unlock(lock_token)
         h5id = -1_HID_T
@@ -254,6 +336,7 @@ contains
         path = joined_path(slot, grpname)
         call writers(root)%define_group(path, status)
         call require_ok(status)
+        write_dirty(root) = .true.
         group_slot = allocate_handle()
         call set_group_handle(group_slot, root, MODE_WRITE, path)
         h5grpid = int(group_slot, HID_T)
@@ -291,6 +374,7 @@ contains
         slot = require_mode(h5id, MODE_WRITE)
         call writers(root_slot(slot))%remove_dataset(joined_path(slot, dataset), status)
         call require_ok(status)
+        write_dirty(root_slot(slot)) = .true.
     end subroutine h5_delete
 
     subroutine h5_copy(source_id, source_path, destination_id, destination_path)
@@ -298,11 +382,12 @@ contains
         character(len=*), intent(in) :: source_path, destination_path
         integer :: source_slot, destination_slot
 
-        source_slot = require_mode(source_id, MODE_READ)
+        source_slot = require_readable(source_id)
         destination_slot = require_mode(destination_id, MODE_WRITE)
         call copy_object(root_slot(source_slot), joined_path(source_slot, source_path), &
             root_slot(destination_slot), &
             joined_path(destination_slot, destination_path))
+        write_dirty(root_slot(destination_slot)) = .true.
     end subroutine h5_copy
 
     recursive subroutine copy_object(source_root, source_path, destination_root, &
@@ -488,6 +573,7 @@ contains
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
         unlimited_buffers(slot)%file_path = writers(root)%path
         unlimited_buffers(slot)%type_code = int(type_id)
+        unlimited_buffers(slot)%dirty = .true.
         select case (unlimited_buffers(slot)%type_code)
         case (UNLIMITED_INTEGER)
             allocate(unlimited_buffers(slot)%values_i32(16), source=0_int32)
@@ -522,6 +608,7 @@ contains
         unlimited_buffers(slot)%path = joined_path(int(h5id), dataset)
         unlimited_buffers(slot)%file_path = writers(root)%path
         unlimited_buffers(slot)%type_code = UNLIMITED_DOUBLE
+        unlimited_buffers(slot)%dirty = .true.
         if (unlimited_dimension == 1) then
             if (dimensions(2) < 1) &
                 error stop "fortio unlimited matrix column count must be positive"
@@ -554,6 +641,7 @@ contains
         end if
         unlimited_buffers(slot)%values_i32(position) = int(value, int32)
         unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+        unlimited_buffers(slot)%dirty = .true.
     end subroutine h5_append_int
 
     subroutine h5_append_double_0(dataset_id, value, position)
@@ -576,6 +664,7 @@ contains
         end if
         unlimited_buffers(slot)%values_r64(position) = value
         unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+        unlimited_buffers(slot)%dirty = .true.
     end subroutine h5_append_double_0
 
     subroutine h5_append_double_1(dataset_id, values, position)
@@ -610,41 +699,28 @@ contains
         end if
         unlimited_buffers(slot)%matrix_r64(:, position) = values
         unlimited_buffers(slot)%used = max(unlimited_buffers(slot)%used, position)
+        unlimited_buffers(slot)%dirty = .true.
     end subroutine h5_append_double_1
 
     subroutine h5_get_int(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         integer, intent(out) :: value
-        type(fortio_status_t) :: status
-        integer(int32) :: temporary
-        integer(int32), allocatable :: temporary_vector(:)
+        real(real64), allocatable :: temporary(:)
         integer(int64), allocatable :: dimensions(:)
-        logical :: is_group
-        integer :: element_size, slot, type_class
-        character(len=:), allocatable :: path
 
-        slot = require_readable(h5id)
-        path = joined_path(slot, dataset)
-        call files(root_slot(slot))%describe(path, is_group, type_class, dimensions, &
-                                              status, element_size)
-        call require_ok(status)
-        if (is_group) error stop "HDF5 integer scalar read found a group"
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
         select case (size(dimensions))
         case (0)
             ! Native HDF5 scalar dataspace.
-            call files(root_slot(slot))%read(path, temporary, status)
-            call require_ok(status)
-            value = int(temporary, kind(value))
+            value = checked_default_integer(temporary(1))
         case (1)
             ! The pre-Fortio hdf5_tools writer represented legacy scalar
             ! values as a rank-1 dataset with one element.  Keep accepting
             ! that valid HDF5 representation through the scalar adapter.
             if (dimensions(1) /= 1_int64) &
                 error stop "HDF5 integer scalar read found a non-unit vector"
-            call files(root_slot(slot))%read(path, temporary_vector, status)
-            call require_ok(status)
-            value = int(temporary_vector(1), kind(value))
+            value = checked_default_integer(temporary(1))
         case default
             error stop "HDF5 integer scalar read found a non-scalar dataset"
         end select
@@ -654,15 +730,15 @@ contains
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         integer, intent(out) :: value(:)
-        type(fortio_status_t) :: status
-        integer(int32), allocatable :: temporary(:)
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
+        integer :: i
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = int(temporary, kind(value))
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        do i = 1, size(value)
+            value(i) = checked_default_integer(temporary(i))
+        end do
     end subroutine h5_get_int_1
 
     subroutine h5_get_i64_1(h5id, dataset, value)
@@ -684,56 +760,53 @@ contains
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         integer, intent(out) :: value(:, :)
-        type(fortio_status_t) :: status
-        integer(int32), allocatable :: temporary(:, :)
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
+        integer, allocatable :: converted(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = int(temporary, kind(value))
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        allocate(converted(size(temporary)))
+        call convert_compatible_integers(temporary, converted)
+        value = reshape(converted, shape(value))
     end subroutine h5_get_int_2
 
     subroutine h5_get_int_3(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         integer, intent(out) :: value(:, :, :)
-        type(fortio_status_t) :: status
-        integer(int32), allocatable :: temporary(:, :, :)
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
+        integer, allocatable :: converted(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = int(temporary, kind(value))
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        allocate(converted(size(temporary)))
+        call convert_compatible_integers(temporary, converted)
+        value = reshape(converted, shape(value))
     end subroutine h5_get_int_3
 
     subroutine h5_get_double_0(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(out) :: value
-        type(fortio_status_t) :: status
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), value, status)
-        call require_ok(status)
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        if (size(temporary) /= 1) error stop "HDF5 real scalar read found non-scalar data"
+        value = temporary(1)
     end subroutine h5_get_double_0
 
     subroutine h5_get_double_1(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(out) :: value(:)
-        type(fortio_status_t) :: status
         real(real64), allocatable :: temporary(:)
-        integer :: slot
+        integer(int64), allocatable :: dimensions(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
         value = temporary
     end subroutine h5_get_double_1
 
@@ -741,6 +814,8 @@ contains
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), contiguous, target, intent(out) :: value(:, :)
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
         type(fortio_status_t) :: status
         integer :: slot
         character(len=2048) :: path
@@ -748,53 +823,100 @@ contains
         slot = require_readable(h5id)
         call joined_path_into(slot, dataset, path)
         call files(root_slot(slot))%read_into_r64_2(trim(path), value, status)
-        call require_ok(status)
+        if (status%ok()) return
+        if (status%code /= FORTIO_ETYPE) call require_ok(status)
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        value = reshape(temporary, shape(value))
     end subroutine h5_get_double_2
 
     subroutine h5_get_double_3(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(out) :: value(:, :, :)
-        type(fortio_status_t) :: status
-        real(real64), allocatable :: temporary(:, :, :)
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = temporary
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        value = reshape(temporary, shape(value))
     end subroutine h5_get_double_3
 
     subroutine h5_get_double_4(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(out) :: value(:, :, :, :)
-        type(fortio_status_t) :: status
-        real(real64), allocatable :: temporary(:, :, :, :)
-        integer :: slot
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
 
-        slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
-        call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = temporary
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        value = reshape(temporary, shape(value))
     end subroutine h5_get_double_4
 
     subroutine h5_get_double_5(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
         character(len=*), intent(in) :: dataset
         real(real64), intent(out) :: value(:, :, :, :, :)
+        real(real64), allocatable :: temporary(:)
+        integer(int64), allocatable :: dimensions(:)
+
+        call read_compatible_r64_flat(h5id, dataset, temporary, dimensions)
+        call require_compatible_shape(shape(value), dimensions)
+        value = reshape(temporary, shape(value))
+    end subroutine h5_get_double_5
+
+    subroutine read_compatible_r64_flat(h5id, dataset, values, dimensions)
+        integer(HID_T), intent(in) :: h5id
+        character(len=*), intent(in) :: dataset
+        real(real64), allocatable, intent(out) :: values(:)
+        integer(int64), allocatable, intent(out) :: dimensions(:)
         type(fortio_status_t) :: status
-        real(real64), allocatable :: temporary(:, :, :, :, :)
-        integer :: slot
+        logical :: is_group
+        integer :: element_size, slot, type_class
+        character(len=:), allocatable :: path
 
         slot = require_readable(h5id)
-        call files(root_slot(slot))%read(joined_path(slot, dataset), temporary, status)
+        path = joined_path(slot, dataset)
+        call files(root_slot(slot))%describe(path, is_group, type_class, dimensions, &
+            status, element_size)
         call require_ok(status)
-        if (any(shape(value) /= shape(temporary))) error stop "HDF5 dataset shape mismatch"
-        value = temporary
-    end subroutine h5_get_double_5
+        if (is_group) error stop "HDF5 numeric read found a group"
+        call files(root_slot(slot))%read_numeric_r64_flat(path, values, status)
+        call require_ok(status)
+    end subroutine read_compatible_r64_flat
+
+    subroutine require_compatible_shape(destination_shape, file_dimensions)
+        integer, intent(in) :: destination_shape(:)
+        integer(int64), intent(in) :: file_dimensions(:)
+
+        if (size(destination_shape) /= size(file_dimensions)) &
+            error stop "HDF5 dataset rank mismatch"
+        if (any(int(destination_shape, int64) /= &
+            file_dimensions(size(file_dimensions):1:-1))) &
+            error stop "HDF5 dataset shape mismatch"
+    end subroutine require_compatible_shape
+
+    subroutine convert_compatible_integers(values, converted)
+        real(real64), intent(in) :: values(:)
+        integer, intent(out) :: converted(:)
+        integer :: i
+
+        if (size(values) /= size(converted)) error stop "HDF5 conversion size mismatch"
+        do i = 1, size(values)
+            converted(i) = checked_default_integer(values(i))
+        end do
+    end subroutine convert_compatible_integers
+
+    integer function checked_default_integer(value) result(converted)
+        real(real64), intent(in) :: value
+        real(real64), parameter :: minimum = real(-huge(0) - 1, real64)
+        real(real64), parameter :: maximum = real(huge(0), real64)
+
+        if (.not. ieee_is_finite(value) .or. value < minimum .or. value > maximum) &
+            error stop "HDF5 numeric value is outside integer range"
+        converted = int(value)
+    end function checked_default_integer
 
     subroutine h5_get_complex_1(h5id, dataset, value)
         integer(HID_T), intent(in) :: h5id
@@ -1467,7 +1589,8 @@ contains
         root = root_slot(slot)
         if (handle_mode(slot) == MODE_READ) return
         if (handle_mode(slot) == MODE_WRITE) then
-            if (read_shadow_open(root)) return
+            call refresh_read_shadow(root)
+            return
         end if
         error stop "fortio HDF5 identifier is not readable"
     end function require_readable
@@ -1504,6 +1627,7 @@ contains
         root_slot(slot) = slot
         root_handle(slot) = .true.
         read_shadow_open(slot) = .false.
+        write_dirty(slot) = .false.
         handle_prefix(slot) = ""
         call handle_table_unlock()
     end subroutine set_root_handle
@@ -1551,6 +1675,54 @@ contains
         call require_ok(status)
     end subroutine close_root
 
+    subroutine checkpoint_stream_writer(slot, status)
+        integer, intent(in) :: slot
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (.not. writers(slot)%streaming) return
+        call writers(slot)%close(status)
+        if (.not. status%ok()) return
+        call writers(slot)%reopen(trim(writers(slot)%path), status)
+    end subroutine checkpoint_stream_writer
+
+    subroutine refresh_read_shadow(root)
+        integer, intent(in) :: root
+        type(fortio_status_t) :: status
+
+        if (read_shadow_open(root) .and. .not. write_dirty(root) .and. &
+            .not. unlimited_buffers_are_dirty(root)) return
+        call flush_unlimited_buffers(root)
+        if (read_shadow_open(root)) then
+            call files(root)%close(status)
+            call require_ok(status)
+            read_shadow_open(root) = .false.
+        end if
+        call writers(root)%close(status)
+        call require_ok(status)
+        call writers(root)%reopen(trim(writers(root)%path), status)
+        call require_ok(status)
+        call files(root)%open(trim(writers(root)%path), status)
+        call require_ok(status)
+        read_shadow_open(root) = .true.
+        write_dirty(root) = .false.
+    end subroutine refresh_read_shadow
+
+    logical function unlimited_buffers_are_dirty(root)
+        integer, intent(in) :: root
+        integer :: slot
+
+        unlimited_buffers_are_dirty = .false.
+        do slot = 1, MAX_OPEN_FILES
+            if (.not. in_use(slot)) cycle
+            if (root_slot(slot) /= root .or. handle_mode(slot) /= MODE_UNLIMITED) cycle
+            if (unlimited_buffers(slot)%dirty) then
+                unlimited_buffers_are_dirty = .true.
+                return
+            end if
+        end do
+    end function unlimited_buffers_are_dirty
+
     subroutine flush_unlimited_buffers(root)
         integer, intent(in) :: root
         type(fortio_status_t) :: status
@@ -1559,6 +1731,7 @@ contains
         do slot = 1, MAX_OPEN_FILES
             if (.not. in_use(slot)) cycle
             if (root_slot(slot) /= root .or. handle_mode(slot) /= MODE_UNLIMITED) cycle
+            if (.not. unlimited_buffers(slot)%dirty) cycle
             if (writers(root)%object_exists(trim(unlimited_buffers(slot)%path))) &
                 call writers(root)%remove_dataset(trim(unlimited_buffers(slot)%path), status)
             select case (unlimited_buffers(slot)%type_code)
@@ -1577,6 +1750,7 @@ contains
                 end if
             end select
             call require_ok(status)
+            unlimited_buffers(slot)%dirty = .false.
         end do
     end subroutine flush_unlimited_buffers
 
@@ -1623,6 +1797,7 @@ contains
         root_slot(slot) = 0
         root_handle(slot) = .false.
         read_shadow_open(slot) = .false.
+        write_dirty(slot) = .false.
         write_lock_token(slot) = -1_c_int
         handle_prefix(slot) = ""
         unlimited_buffers(slot)%file_path = ""
@@ -1631,6 +1806,7 @@ contains
         unlimited_buffers(slot)%used = 0
         unlimited_buffers(slot)%row_count = 0
         unlimited_buffers(slot)%column_limit = 0
+        unlimited_buffers(slot)%dirty = .false.
         if (allocated(unlimited_buffers(slot)%values_i32)) &
             deallocate(unlimited_buffers(slot)%values_i32)
         if (allocated(unlimited_buffers(slot)%values_r64)) &
@@ -1714,6 +1890,7 @@ contains
         character(len=*), intent(in) :: dataset
         type(fortio_status_t) :: status
 
+        write_dirty(root_slot(slot)) = .true.
         if (.not. h5overwrite) return
         call writers(root_slot(slot))%remove_dataset(joined_path(slot, dataset), status)
         call require_ok(status)

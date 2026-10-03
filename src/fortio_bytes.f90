@@ -3,8 +3,8 @@ module fortio_bytes
         c_null_char, c_null_ptr, c_ptr, c_size_t
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_posix, only: mapped_close, mapped_copy, mapped_copy_swap64, mapped_open, &
-        posix_close, posix_create_write, posix_open_read, posix_pwrite, &
-        posix_pwrite_swap64, posix_truncate
+        posix_close, posix_create_write, posix_open_read, posix_open_write, posix_pwrite, &
+        posix_pwrite_swap64, posix_sync, posix_truncate
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -40,7 +40,9 @@ module fortio_bytes
         integer(int64) :: position = 1_int64
     contains
         procedure :: open => writer_open
+        procedure :: reopen => writer_reopen
         procedure :: close => writer_close
+        procedure :: sync => writer_sync
         procedure :: reset => writer_reset
         procedure :: seek => writer_seek
         procedure :: write_i8 => writer_write_i8
@@ -55,6 +57,7 @@ module fortio_bytes
         procedure :: write_le_r32 => writer_write_le_r32
         procedure :: write_le_r64 => writer_write_le_r64
         procedure :: write_le_r64_array => writer_write_le_r64_array
+        procedure :: write_le_c64_array => writer_write_le_c64_array
         procedure :: write_bytes => writer_write_bytes
     end type byte_writer_t
 
@@ -75,15 +78,47 @@ contains
         this%position = 1_int64
     end subroutine writer_open
 
+    subroutine writer_reopen(this, path, status)
+        class(byte_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+
+        call status%clear()
+        if (this%descriptor >= 0_c_int) then
+            call status%set(FORTIO_EIO, "cannot reopen an open file")
+            return
+        end if
+        this%descriptor = posix_open_write(trim(path)//c_null_char)
+        if (this%descriptor < 0_c_int) then
+            call status%set(FORTIO_EIO, "POSIX open failed")
+            return
+        end if
+        this%position = 1_int64
+    end subroutine writer_reopen
+
+    subroutine writer_sync(this, status)
+        class(byte_writer_t), intent(in) :: this
+        type(fortio_status_t), intent(inout) :: status
+        integer(c_int) :: io_status
+
+        call status%clear()
+        if (this%descriptor < 0_c_int) then
+            call status%set(FORTIO_EIO, "cannot sync a closed file")
+            return
+        end if
+        io_status = posix_sync(this%descriptor)
+        if (io_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX sync failed")
+    end subroutine writer_sync
+
     subroutine writer_close(this, status)
         class(byte_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
-        integer :: io_status
+        integer(c_int) :: io_status
 
         call status%clear()
         if (this%descriptor < 0_c_int) return
         io_status = posix_close(this%descriptor)
-        if (io_status /= 0) call status%set(FORTIO_EIO, "POSIX close failed")
+        if (io_status /= 0_c_int) call status%set(FORTIO_EIO, "POSIX close failed")
         this%descriptor = -1_c_int
         this%position = 1_int64
     end subroutine writer_close
@@ -272,6 +307,35 @@ contains
         end if
     end subroutine writer_write_le_r64_array
 
+    subroutine writer_write_le_c64_array(this, values, status)
+        class(byte_writer_t), intent(inout) :: this
+        complex(real64), contiguous, target, intent(in) :: values(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: bytes(:)
+        integer(c_int64_t) :: byte_count, bytes_written
+
+        call status%clear()
+        byte_count = 16_c_int64_t*size(values, kind=c_int64_t)
+        if (host_is_little_endian()) then
+            ! gfortran and the other supported compilers use the standard
+            ! interleaved real/imaginary representation for double complex.
+            ! Keep this as one bulk write: large MEPHIT complex datasets make
+            ! scalar write calls prohibitively expensive.
+            bytes_written = posix_pwrite(this%descriptor, c_loc(values), &
+                int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
+            if (bytes_written /= byte_count) then
+                call status%set(FORTIO_EIO, "POSIX write returned incomplete data")
+                return
+            end if
+            this%position = this%position + int(byte_count, int64)
+        else
+            allocate(bytes(16*size(values)))
+            bytes = transfer(values, bytes)
+            call reverse_elements(bytes, 8)
+            call this%write_bytes(bytes, status)
+        end if
+    end subroutine writer_write_le_c64_array
+
     subroutine writer_write_le_r32(this, value, status)
         class(byte_writer_t), intent(inout) :: this
         real(real32), intent(in) :: value
@@ -333,7 +397,8 @@ contains
         bytes_read = mapped_copy(this%mapping, c_loc(values), int(byte_count, c_size_t), &
             int(this%position - 1_int64, c_int64_t))
         if (bytes_read /= byte_count) then
-            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data at position " // &
+                int_to_text(this%position) // " for " // int_to_text(byte_count) // " bytes")
             return
         end if
         this%position = this%position + int(byte_count, int64)
@@ -421,11 +486,21 @@ contains
                 int(byte_count, c_size_t), int(this%position - 1_int64, c_int64_t))
         end if
         if (bytes_read /= byte_count) then
-            call status%set(FORTIO_EIO, "mapped read returned incomplete data")
+            call status%set(FORTIO_EIO, "mapped read returned incomplete data at position " // &
+                int_to_text(this%position) // " for " // int_to_text(byte_count) // " bytes")
             return
         end if
         this%position = this%position + int(byte_count, int64)
     end subroutine reader_read_be_r64_array
+
+    function int_to_text(value) result(text)
+        integer(int64), intent(in) :: value
+        character(len=:), allocatable :: text
+        character(len=32) :: buffer
+
+        write (buffer, '(i0)') value
+        text = trim(buffer)
+    end function int_to_text
 
     subroutine reader_read_le_i16(this, value, status)
         class(byte_reader_t), intent(inout) :: this
