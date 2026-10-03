@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and independent format oracles
         run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
-      - uses: fortran-lang/setup-fpm@597c61f30fb11079835df98584f1fc3608385bee # v7
+      - uses: fortran-lang/setup-fpm@a03b5f81f16417c937a31b745eeb866c5a26a7a0 # v10
       - name: Build
         run: fpm build
       - name: Test
@@ -124,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install GNU Fortran
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: UCRT64
           update: true
