@@ -217,8 +217,14 @@ contains
             call status%set(FORTIO_ESTATE, "HDF5 writer state is incomplete")
             return
         end if
-        call this%output%reopen(this%path, status)
-        if (.not. status%ok()) return
+        ! Suspension can retain an open descriptor or a memory-only image
+        ! that has not yet been written. Reopen only a closed on-disk image.
+        if (this%output%descriptor < 0) then
+            if (this%streaming .or. this%output_initialized) then
+                call this%output%reopen(this%path, status)
+                if (.not. status%ok()) return
+            end if
+        end if
         this%opened = .true.
     end subroutine hdf5_writer_reopen
 
