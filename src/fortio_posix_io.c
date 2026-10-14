@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -245,7 +246,30 @@ int64_t fortio_posix_pread(
     }
     return (int64_t)transferred;
 #else
-    return (int64_t)pread(descriptor, buffer, count, (off_t)offset);
+    size_t total = 0;
+    unsigned char *bytes = buffer;
+
+    if (offset < 0 || count > (uint64_t)INT64_MAX - (uint64_t)offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    while (total < count) {
+        /* Bound each call and continue after short transfers (e.g. MAX_RW_COUNT). */
+        size_t remaining = count - total;
+        size_t chunk = remaining < 1073741824U ? remaining : 1073741824U;
+        ssize_t transferred = pread(descriptor, bytes + total, chunk,
+            (off_t)(offset + (int64_t)total));
+
+        if (transferred < 0) {
+            if (errno == EINTR)
+                continue;
+            return total ? (int64_t)total : -1;
+        }
+        if (transferred == 0)
+            break;
+        total += (size_t)transferred;
+    }
+    return (int64_t)total;
 #endif
 }
 
@@ -268,7 +292,30 @@ int64_t fortio_posix_pwrite(
     }
     return (int64_t)transferred;
 #else
-    return (int64_t)pwrite(descriptor, buffer, count, (off_t)offset);
+    size_t total = 0;
+    const unsigned char *bytes = buffer;
+
+    if (offset < 0 || count > (uint64_t)INT64_MAX - (uint64_t)offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    while (total < count) {
+        /* Bound each call and continue after short transfers (e.g. MAX_RW_COUNT). */
+        size_t remaining = count - total;
+        size_t chunk = remaining < 1073741824U ? remaining : 1073741824U;
+        ssize_t transferred = pwrite(descriptor, bytes + total, chunk,
+            (off_t)(offset + (int64_t)total));
+
+        if (transferred < 0) {
+            if (errno == EINTR)
+                continue;
+            return total ? (int64_t)total : -1;
+        }
+        if (transferred == 0)
+            break;
+        total += (size_t)transferred;
+    }
+    return (int64_t)total;
 #endif
 }
 
