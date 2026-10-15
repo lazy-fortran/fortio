@@ -1,5 +1,4 @@
 module hdf5_tools
-    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_c_binding, only: c_int, c_null_char, c_size_t
     use, intrinsic :: iso_fortran_env, only: int32, int64, real32, real64
     use fortio, only: fortio_file_t, hdf5_attribute_t
@@ -909,6 +908,7 @@ contains
     end subroutine convert_compatible_integers
 
     integer function checked_default_integer(value) result(converted)
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
         real(real64), intent(in) :: value
         real(real64), parameter :: minimum = real(-huge(0) - 1, real64)
         real(real64), parameter :: maximum = real(huge(0), real64)
