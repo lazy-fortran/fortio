@@ -24,7 +24,7 @@ module fortio_netcdf_classic
     end type classic_dimension_t
 
     type, public :: classic_attribute_t
-        character(len=256) :: name = ""
+        character(len=:), allocatable :: name
         integer :: type_code = 0
         integer :: element_count = 0
         integer(int8), allocatable :: bytes(:)
