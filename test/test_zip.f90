@@ -5,7 +5,7 @@ program test_zip
 
     type(zip_writer_t) :: archive
     type(fortio_status_t) :: status
-    integer(int8) :: bytes(5)
+    integer(int8) :: bytes(5), empty_bytes(0)
     character(len=512) :: archive_path, script, source_path
     integer :: command_status, io_status, unit
 
@@ -28,7 +28,7 @@ program test_zip
     if (.not. status%ok()) error stop trim(status%message)
     call archive%add("hello.txt", "Fortio ZIP"//new_line("a"), status)
     if (.not. status%ok()) error stop trim(status%message)
-    call archive%add("empty.bin", [integer(int8) ::], status)
+    call archive%add("empty.bin", empty_bytes, status)
     if (.not. status%ok()) error stop trim(status%message)
     call archive%add("bytes.bin", bytes, status, level=4)
     if (.not. status%ok()) error stop trim(status%message)

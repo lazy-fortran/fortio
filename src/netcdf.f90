@@ -114,6 +114,12 @@ contains
             code = NF90_EBADID
             return
         end if
+        ! A slot can be reused after either reader backend.  Set the backend
+        ! state explicitly before opening so a stale NetCDF-4 flag cannot
+        ! route a classic file through the other metadata store.
+        writing(slot) = .false.
+        writing_netcdf4(slot) = .false.
+        netcdf4_reading(slot) = .false.
         call files(slot)%open(path, status)
         if (.not. status%ok()) then
             call netcdf4_files(slot)%hdf5%open(path, status)
@@ -215,8 +221,9 @@ contains
         integer, intent(in) :: ncid, type_code
         character(len=*), intent(in) :: name
         integer, intent(out) :: varid
+        integer :: scalar_dimension_ids(0)
 
-        code = def_var_array(ncid, name, type_code, [integer ::], varid)
+        code = def_var_array(ncid, name, type_code, scalar_dimension_ids, varid)
     end function def_var_scalar
 
     integer function def_var_one_dimension(ncid, name, type_code, dimension_id, &
@@ -1498,7 +1505,7 @@ contains
 
         unsigned = iand(int(value, int64), int(z'ffffffff', int64))
         do i = 1, 4
-            bytes(i) = int(iand(shiftr(unsigned, 8*(4 - i)), 255_int64), int8)
+            bytes(i) = int(iand(ishft(unsigned, -8*(4 - i)), 255_int64), int8)
         end do
     end subroutine encode_be_i32
 
@@ -1508,7 +1515,7 @@ contains
         integer :: i
 
         do i = 1, 8
-            bytes(i) = int(iand(shiftr(value, 8*(8 - i)), 255_int64), int8)
+            bytes(i) = int(iand(ishft(value, -8*(8 - i)), 255_int64), int8)
         end do
     end subroutine encode_be_i64
 
@@ -1700,7 +1707,8 @@ contains
         if (varid == NF90_GLOBAL) then
             if (netcdf4_reading(ncid)) then
                 do i = 1, size(netcdf4_files(ncid)%global_attributes)
-                    if (netcdf4_files(ncid)%global_attributes(i)%name == trim(name)) then
+                    if (same_attribute_name( &
+                        netcdf4_files(ncid)%global_attributes(i)%name, name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1708,7 +1716,8 @@ contains
                 end do
             else
                 do i = 1, size(files(ncid)%global_attributes)
-                    if (files(ncid)%global_attributes(i)%name == trim(name)) then
+                    if (same_attribute_name(files(ncid)%global_attributes(i)%name, &
+                        name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1726,8 +1735,9 @@ contains
                     return
                 end if
                 do i = 1, size(netcdf4_files(ncid)%variables(varid)%attributes)
-                    if (netcdf4_files(ncid)%variables(varid)%attributes(i)%name == &
-                        trim(name)) then
+                    if (same_attribute_name( &
+                        netcdf4_files(ncid)%variables(varid)%attributes(i)%name, &
+                        name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1739,7 +1749,7 @@ contains
                     return
                 end if
                 do i = 1, size(files(ncid)%variables(varid)%attributes)
-                    if (files(ncid)%variables(varid)%attributes(i)%name == trim(name)) then
+                    if (same_attribute_name(files(ncid)%variables(varid)%attributes(i)%name, name)) then
                         attribute_id = i
                         code = NF90_NOERR
                         return
@@ -1749,6 +1759,23 @@ contains
         end if
         code = NF90_ENOTATT
     end function find_attribute
+
+    logical function same_attribute_name(left, right) result(equal)
+        character(len=*), intent(in) :: left, right
+        integer :: i, left_length, right_length
+
+        left_length = len_trim(left)
+        right_length = len_trim(right)
+        equal = .false.
+        if (left_length /= right_length) return
+        equal = .true.
+        do i = 1, right_length
+            if (left(i:i) /= right(i:i)) then
+                equal = .false.
+                return
+            end if
+        end do
+    end function same_attribute_name
 
     integer function attribute_type(ncid, varid, attribute_id) result(type_code)
         integer, intent(in) :: ncid, varid, attribute_id
