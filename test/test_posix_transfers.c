@@ -1,3 +1,4 @@
+#ifdef FORTIO_POSIX_TRANSFER_WRAP_TEST
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
@@ -102,3 +103,4 @@ int main(void)
     puts("short transfers, EINTR, EOF, no-progress and >2 GiB write: PASS");
     return 0;
 }
+#endif

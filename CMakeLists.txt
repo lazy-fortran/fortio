@@ -123,6 +123,8 @@ if(FORTIO_BUILD_TESTING)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(test_posix_transfers test/test_posix_transfers.c)
+        target_compile_definitions(test_posix_transfers PRIVATE
+            FORTIO_POSIX_TRANSFER_WRAP_TEST)
         target_link_libraries(test_posix_transfers PRIVATE fortio)
         target_link_options(test_posix_transfers PRIVATE
             "-Wl,--wrap=pread" "-Wl,--wrap=pwrite")
