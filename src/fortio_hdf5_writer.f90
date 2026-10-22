@@ -1148,7 +1148,7 @@ contains
                 if (this%streaming) then
                     call this%output%seek(1_int64)
                 else
-                    call this%output%reset(status)
+                    call this%output%reset(status, eof_address)
                 end if
             else
                 call this%output%open(this%path, status)
@@ -1156,7 +1156,9 @@ contains
         else if (this%streaming) then
             call this%output%seek(1_int64)
         else
-            call this%output%reset(status)
+            ! Rewrite the complete image without first discarding its extents.
+            ! Shrinking still removes any trailing bytes from the old image.
+            call this%output%reset(status, eof_address)
         end if
         if (.not. status%ok()) return
         metadata = make_superblock(eof_address)

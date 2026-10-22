@@ -123,17 +123,21 @@ contains
         this%position = 1_int64
     end subroutine writer_close
 
-    subroutine writer_reset(this, status)
+    subroutine writer_reset(this, status, length)
         class(byte_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
+        integer(int64), intent(in), optional :: length
         integer(c_int) :: io_status
+        integer(c_int64_t) :: target_length
 
         call status%clear()
         if (this%descriptor < 0_c_int) then
             call status%set(FORTIO_EIO, "cannot reset a closed file")
             return
         end if
-        io_status = posix_truncate(this%descriptor, 0_c_int64_t)
+        target_length = 0_c_int64_t
+        if (present(length)) target_length = int(length, c_int64_t)
+        io_status = posix_truncate(this%descriptor, target_length)
         if (io_status /= 0_c_int) then
             call status%set(FORTIO_EIO, "file truncate failed")
             return
