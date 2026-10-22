@@ -216,12 +216,42 @@ int fortio_posix_sync(int descriptor)
 #endif
 }
 
+int64_t fortio_posix_pwrite(
+    int descriptor, const void *buffer, size_t count, int64_t offset);
+
 int fortio_posix_truncate(int descriptor, int64_t length)
 {
     if (length < 0)
         return -1;
 #ifdef _WIN32
-    return _chsize_s(descriptor, (__int64)length) == 0 ? 0 : -1;
+    HANDLE handle = (HANDLE)_get_osfhandle(descriptor);
+    LARGE_INTEGER size;
+    FILE_END_OF_FILE_INFO end;
+    static const unsigned char zeros[65536] = {0};
+
+    if (handle == INVALID_HANDLE_VALUE || !GetFileSizeEx(handle, &size))
+        return -1;
+    if (length <= size.QuadPart) {
+        end.EndOfFile.QuadPart = length;
+        return SetFileInformationByHandle(
+            handle, FileEndOfFileInfo, &end, sizeof(end)) ? 0 : -1;
+    }
+
+    /* UCRT _chsize_s grows with synchronous _write, which is incompatible
+       with our FILE_FLAG_OVERLAPPED handles. Explicit positional zero writes
+       also guarantee the same zero-filled extension as POSIX ftruncate. */
+    while (size.QuadPart < length) {
+        int64_t remaining = length - size.QuadPart;
+        size_t count = remaining < (int64_t)sizeof(zeros)
+            ? (size_t)remaining : sizeof(zeros);
+        int64_t transferred = fortio_posix_pwrite(
+            descriptor, zeros, count, size.QuadPart);
+
+        if (transferred <= 0)
+            return -1;
+        size.QuadPart += transferred;
+    }
+    return 0;
 #else
     return ftruncate(descriptor, (off_t)length);
 #endif
