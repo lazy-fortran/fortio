@@ -1,5 +1,4 @@
 module netcdf
-    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: int8, int32, int64, real32, real64
     use fortio_bytes, only: decode_be_i32, decode_be_i64
     use fortio_netcdf_classic, only: classic_file_t, classic_dimension_t, &
@@ -1017,6 +1016,7 @@ contains
     end subroutine convert_r64_array_to_i32
 
     subroutine convert_r64_to_i32(value, converted, status)
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
         real(real64), intent(in) :: value
         integer(int32), intent(out) :: converted
         type(fortio_status_t), intent(inout) :: status
