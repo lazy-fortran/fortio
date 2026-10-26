@@ -207,6 +207,12 @@ if(FORTIO_BUILD_TESTING)
         PASS_REGULAR_EXPRESSION
         "description = \"padded description\" ;")
 
+    add_executable(test_hdf5_filtered_read test/test_hdf5_filtered_read.f90)
+    target_link_libraries(test_hdf5_filtered_read PRIVATE fortio)
+    add_test(NAME hdf5_filtered_read COMMAND test_hdf5_filtered_read
+        "${CMAKE_CURRENT_BINARY_DIR}/filtered-oracle"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/make_hdf5_filtered_oracle.py")
+
     add_executable(test_hdf5_read test/test_hdf5_read.f90)
     target_link_libraries(test_hdf5_read PRIVATE fortio)
     add_test(NAME hdf5_read COMMAND test_hdf5_read
