@@ -43,6 +43,8 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     # fortio uses standard allocatable assignment internally. Some consumers,
     # including libneo, disable that language behavior project-wide.
     target_compile_options(fortio PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:-frealloc-lhs>)
+    # Concurrent callers need independent automatic locals and recursive entry.
+    target_compile_options(fortio PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:-frecursive>)
 endif()
 
 if(FORTIO_BUILD_BENCHMARKS)

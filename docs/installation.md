@@ -16,6 +16,13 @@ Pin a released tag:
 fortio = { git = "https://github.com/lazy-fortran/fortio.git", tag = "v0.3.0" }
 ```
 
+With GNU Fortran, applications that call Fortio concurrently must compile the
+library with `-frecursive`, for example by passing `--flag "-frecursive"` to fpm.
+This gives each call independent automatic local storage and permits concurrent
+entry. Fortio itself needs no OpenMP dependency; applications using OpenMP must
+also enable it for their own parallel code. The CMake target sets `-frecursive`
+for GNU Fortran automatically.
+
 ## Installed CMake package
 
 ```cmake
