@@ -78,7 +78,9 @@ for version in ("earliest", "latest"):
             assert handle["fletcher"].id.get_chunk_info(0).filter_mask == 0
             assert handle["fletcher_skipped"].id.get_chunk_info(0).filter_mask == 1
             assert handle["pipeline_skipped"].id.get_chunk_info(0).filter_mask == 4
-            assert list(handle["pipeline_skipped"].filter_ids) == [2, 1, 3]
+            plist = handle["pipeline_skipped"].id.get_create_plist()
+            pipeline = [plist.get_filter(i)[0] for i in range(plist.get_nfilters())]
+            assert pipeline == [2, 1, 3]
             np.testing.assert_array_equal(handle["fletcher"][()], values)
             np.testing.assert_array_equal(handle["fletcher_skipped"][()], values)
             np.testing.assert_array_equal(handle["pipeline_skipped"][()], values)
