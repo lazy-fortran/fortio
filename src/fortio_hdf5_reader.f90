@@ -23,6 +23,9 @@ module fortio_hdf5_reader
     integer, parameter :: H5_TYPE_COMPOUND = 6
     integer, parameter :: H5_LAYOUT_CONTIGUOUS = 1
     integer, parameter :: H5_LAYOUT_CHUNKED = 2
+    integer, parameter :: H5_FILTER_DEFLATE = 1
+    integer, parameter :: H5_FILTER_SHUFFLE = 2
+    integer, parameter :: H5_FILTER_MASK_BITS = 32
 
     type :: hdf5_link_t
         character(len=:), allocatable :: name
@@ -50,6 +53,8 @@ module fortio_hdf5_reader
         integer :: filter_mask = 0
         integer :: shuffle_index = -1
         integer :: deflate_index = -1
+        integer(int32), allocatable :: filter_ids(:)
+        logical :: chunked = .false.
         type(hdf5_attribute_t), allocatable :: attributes(:)
     end type hdf5_dataset_t
 
@@ -819,6 +824,8 @@ contains
         integer :: i
 
         native_little_endian = host_is_little_endian()
+        call reject_applied_filters(dataset, status)
+        if (.not. status%ok()) return
         apply_deflate = filter_is_applied(dataset%deflate_index, dataset%filter_mask)
         apply_shuffle = filter_is_applied(dataset%shuffle_index, dataset%filter_mask)
         if (dataset%element_size == 8) then
@@ -911,6 +918,8 @@ contains
         logical :: apply_deflate, apply_shuffle
 
         call status%clear()
+        call reject_applied_filters(dataset, status)
+        if (.not. status%ok()) return
         allocate(stored(dataset%data_size))
         call this%reader%seek(this%base_address + dataset%data_address + 1)
         call this%reader%read_bytes(stored, status)
@@ -937,6 +946,11 @@ contains
 
         filter_is_applied = .false.
         if (index < 0) return
+        ! Only the first 32 pipeline entries can be marked skipped in a mask.
+        if (index >= H5_FILTER_MASK_BITS) then
+            filter_is_applied = .true.
+            return
+        end if
         filter_is_applied = .not. btest(mask, index)
     end function filter_is_applied
 
@@ -1040,6 +1054,8 @@ contains
             return
         end if
         count = product(dataset%dimensions)
+        call reject_applied_filters(dataset, status)
+        if (.not. status%ok()) return
         allocate(values(count))
         call this%reader%seek(this%base_address + dataset%data_address + 1)
         do i = 1, size(values)
@@ -2065,6 +2081,7 @@ contains
             return
         end if
         if (version == 3 .and. layout_class == H5_LAYOUT_CHUNKED) then
+            dataset%chunked = .true.
             call this%reader%read_i8(rank_byte, status)
             call read_unsigned(this%reader, this%offset_size, ignored, status)
             if (.not. status%ok()) return
@@ -2087,6 +2104,7 @@ contains
         if (.not. status%ok()) return
         rank = byte_value(rank_byte)
         width = byte_value(width_byte)
+        dataset%chunked = .true.
         do i = 1, rank
             call read_unsigned(this%reader, width, ignored, status)
             if (.not. status%ok()) return
@@ -2162,10 +2180,12 @@ contains
         version = byte_value(version_byte)
         count = byte_value(count_byte)
         if (version == 1) call skip_bytes(this%reader, 6_int64)
+        allocate(dataset%filter_ids(count))
         do i = 0, count - 1
             call this%reader%read_le_i16(filter_id_i16, status)
             if (.not. status%ok()) return
-            filter_id = int(filter_id_i16)
+            ! Filter ids are unsigned, and ids above 255 carry a name field.
+            filter_id = iand(int(filter_id_i16), 65535)
             name_length = 0
             if (version == 1 .or. filter_id >= 256) then
                 call this%reader%read_le_i16(name_length_i16, status)
@@ -2182,10 +2202,41 @@ contains
             end do
             if (version == 1 .and. mod(value_count, 2) == 1) &
                 call skip_bytes(this%reader, 4_int64)
-            if (filter_id == 2) dataset%shuffle_index = i
-            if (filter_id == 1) dataset%deflate_index = i
+            dataset%filter_ids(i + 1) = filter_id
+            if (filter_id == H5_FILTER_SHUFFLE) dataset%shuffle_index = i
+            if (filter_id == H5_FILTER_DEFLATE) dataset%deflate_index = i
         end do
     end subroutine parse_filter_message
+
+    logical function filter_is_supported(filter_id)
+        integer, intent(in) :: filter_id
+
+        filter_is_supported = filter_id == H5_FILTER_DEFLATE .or. &
+            filter_id == H5_FILTER_SHUFFLE
+    end function filter_is_supported
+
+    subroutine reject_applied_filters(dataset, status)
+        !! Reject chunk bytes whose active pipeline still holds a filter fortio
+        !! cannot undo, so stored bytes are never handed back as decoded numbers.
+        !! Filters the chunk mask marks as skipped stay accepted, and supported
+        !! filters keep the pipeline position they were recorded at.
+        type(hdf5_dataset_t), intent(in) :: dataset
+        type(fortio_status_t), intent(inout) :: status
+        integer :: i
+
+        if (.not. dataset%chunked) return
+        if (.not. allocated(dataset%filter_ids)) return
+        do i = 1, size(dataset%filter_ids)
+            if (filter_is_supported(dataset%filter_ids(i))) cycle
+            ! Only the first 32 entries can be recorded as skipped in a chunk mask.
+            if (i <= H5_FILTER_MASK_BITS) then
+                if (btest(dataset%filter_mask, i - 1)) cycle
+            end if
+            call status%set(FORTIO_ENOTSUP, &
+                "HDF5 chunk applies an unsupported filter")
+            return
+        end do
+    end subroutine reject_applied_filters
 
     subroutine parse_attribute_message(this, dataset, status)
         class(hdf5_file_t), intent(inout) :: this
