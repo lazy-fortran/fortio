@@ -997,7 +997,7 @@ contains
         type(fortio_status_t), intent(inout) :: status
         integer(int64), allocatable :: dimensions(:)
         logical :: is_group
-        integer :: element_size, type_class
+        integer :: element_size, type_class, i
 
         call file%hdf5%describe(file%variables(varid)%name, is_group, type_class, &
             dimensions, status, element_size)
@@ -1006,7 +1006,10 @@ contains
             call status%set(NF90_EINVAL, "numeric variable is a group")
             return
         end if
-        source_shape = int(dimensions(size(dimensions):1:-1))
+        allocate(source_shape(size(dimensions)))
+        do i = 1, size(dimensions)
+            source_shape(i) = int(dimensions(size(dimensions) - i + 1))
+        end do
         call file%hdf5%read_numeric_r64_flat(file%variables(varid)%name, values, status)
     end subroutine read_netcdf4_r64_flat
 
