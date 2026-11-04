@@ -150,7 +150,11 @@ contains
         allocate(temporary(count + 1)%attributes(0))
         ! The compatibility API accepts Fortran dimension order. Classic
         ! headers store C dimension order.
-        temporary(count + 1)%dimension_ids = dimension_ids(size(dimension_ids):1:-1)
+        ! nvfortran can infer an empty extent for an allocated reversed section.
+        allocate(temporary(count + 1)%dimension_ids(size(dimension_ids)))
+        do i = 1, size(dimension_ids)
+            temporary(count + 1)%dimension_ids(i) = dimension_ids(size(dimension_ids) - i + 1)
+        end do
         count_values = 1
         do i = 1, size(dimension_ids)
             count_values = count_values*this%dimensions(dimension_ids(i) + 1)%length
