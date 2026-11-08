@@ -123,9 +123,15 @@ contains
         call files(slot)%open(path, status)
         if (.not. status%ok()) then
             call netcdf4_files(slot)%hdf5%open(path, status)
-            if (status%ok()) call load_netcdf4_metadata(netcdf4_files(slot), status)
             if (.not. status%ok()) then
                 code = status%code
+                call release_slot(slot)
+                return
+            end if
+            call load_netcdf4_metadata(netcdf4_files(slot), status)
+            if (.not. status%ok()) then
+                code = status%code
+                call close_netcdf4_reader(slot, status)
                 call release_slot(slot)
                 return
             end if
@@ -184,11 +190,7 @@ contains
                 call writers(ncid)%close(status)
             end if
         else if (netcdf4_reading(ncid)) then
-            call netcdf4_files(ncid)%hdf5%close(status)
-            if (allocated(netcdf4_files(ncid)%dimensions)) &
-                deallocate(netcdf4_files(ncid)%dimensions)
-            if (allocated(netcdf4_files(ncid)%variables)) &
-                deallocate(netcdf4_files(ncid)%variables)
+            call close_netcdf4_reader(ncid, status)
         else
             call files(ncid)%close(status)
         end if
@@ -1243,6 +1245,20 @@ contains
         if (slot /= 0) in_use(slot) = .true.
         call handle_table_unlock()
     end function claim_free_slot
+
+    !> Close a NetCDF-4 reader and free its metadata, also after a partial load.
+    subroutine close_netcdf4_reader(slot, status)
+        integer, intent(in) :: slot
+        type(fortio_status_t), intent(inout) :: status
+        type(fortio_status_t) :: close_status
+
+        call netcdf4_files(slot)%hdf5%close(close_status)
+        if (status%ok()) status = close_status
+        if (allocated(netcdf4_files(slot)%dimensions)) &
+            deallocate(netcdf4_files(slot)%dimensions)
+        if (allocated(netcdf4_files(slot)%variables)) &
+            deallocate(netcdf4_files(slot)%variables)
+    end subroutine close_netcdf4_reader
 
     subroutine release_slot(slot)
         integer, intent(in) :: slot
