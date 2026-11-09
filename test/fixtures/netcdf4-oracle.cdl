@@ -18,6 +18,7 @@ variables:
         :boozer_field = 1 ;
         :torflux = 1.25 ;
         :gvec2chartmap_boozer_factor = 1LL ;
+        :wide_count = 3000000000LL ;
 data:
     count = 3 ;
     huge_value = 1.e300 ;

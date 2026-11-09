@@ -8,9 +8,9 @@ program test_netcdf4_read
 
     character(len=1024) :: fixture, cdl, command
     character(len=16) :: convention, units
-    integer(int32) :: count, indices(2), integer_radius_values(3)
+    integer(int32) :: count, indices(2), integer_radius_values(3), factor
     real(real64) :: radius(3), radius_values(3), coefficients(3, 2), flattened(6), &
-        torflux, real_count
+        torflux, real_count, real_factor
     integer :: ncid, dimid, varid, length, command_status, attribute_type
 
     call get_command_argument(1, fixture)
@@ -87,5 +87,17 @@ program test_netcdf4_read
         error stop "NetCDF-4 numeric global attribute read failed"
     if (abs(torflux - 1.25_real64) > 1.0e-12_real64) &
         error stop "NetCDF-4 numeric global attribute differs"
+    ! 64-bit integer attributes convert like nc_get_att_int and nc_get_att_double.
+    if (nf90_get_att(ncid, NF90_GLOBAL, "gvec2chartmap_boozer_factor", factor) /= &
+        NF90_NOERR) error stop "NetCDF-4 int64 attribute read as int32 failed"
+    if (factor /= 1_int32) error stop "NetCDF-4 int64 attribute as int32 differs"
+    if (nf90_get_att(ncid, NF90_GLOBAL, "gvec2chartmap_boozer_factor", real_factor) /= &
+        NF90_NOERR) error stop "NetCDF-4 int64 attribute read as real64 failed"
+    if (real_factor /= 1.0_real64) error stop "NetCDF-4 int64 attribute as real64 differs"
+    if (nf90_get_att(ncid, NF90_GLOBAL, "wide_count", factor) /= NF90_ERANGE) &
+        error stop "NetCDF-4 out-of-range int64 attribute did not return NF90_ERANGE"
+    if (nf90_get_att(ncid, NF90_GLOBAL, "wide_count", real_factor) /= NF90_NOERR) &
+        error stop "NetCDF-4 wide int64 attribute read as real64 failed"
+    if (real_factor /= 3.0e9_real64) error stop "NetCDF-4 wide int64 attribute differs"
     if (nf90_close(ncid) /= NF90_NOERR) error stop "NetCDF-4 oracle close failed"
 end program test_netcdf4_read

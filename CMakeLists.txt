@@ -153,7 +153,9 @@ if(FORTIO_BUILD_TESTING)
     add_executable(test_netcdf4_slot_reuse test/test_netcdf4_slot_reuse.f90)
     target_link_libraries(test_netcdf4_slot_reuse PRIVATE fortio)
     add_test(NAME netcdf4_slot_reuse COMMAND test_netcdf4_slot_reuse
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        "${CMAKE_CURRENT_BINARY_DIR}/slot-reuse-plain.h5"
+        "${CMAKE_CURRENT_BINARY_DIR}/slot-reuse-netcdf4.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/netcdf4-oracle.cdl")
     add_executable(test_netcdf4_read test/test_netcdf4_read.f90)
     target_link_libraries(test_netcdf4_read PRIVATE fortio)
     add_test(NAME netcdf4_read COMMAND test_netcdf4_read
