@@ -13,9 +13,12 @@ program test_netcdf4_slot_reuse
     complex(real64) :: c(3, 2)
     integer :: ncid, command_status, k
 
-    plain = "build/slot-reuse-plain.h5"
-    fixture = "build/slot-reuse-netcdf4.nc"
-    cdl = "test/fixtures/netcdf4-oracle.cdl"
+    call get_command_argument(1, plain)
+    if (len_trim(plain) == 0) plain = "build/slot-reuse-plain.h5"
+    call get_command_argument(2, fixture)
+    if (len_trim(fixture) == 0) fixture = "build/slot-reuse-netcdf4.nc"
+    call get_command_argument(3, cdl)
+    if (len_trim(cdl) == 0) cdl = "test/fixtures/netcdf4-oracle.cdl"
     u = 1.0_real64
     call h5_init()
     call h5_create(trim(plain), h5id)

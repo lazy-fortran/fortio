@@ -508,6 +508,7 @@ contains
         integer, intent(in) :: ncid, varid
         character(len=*), intent(in) :: name
         integer(int32), intent(out) :: value(:)
+        integer(int64) :: wide
         integer :: attribute_id, i, width
 
         code = find_attribute(ncid, varid, name, attribute_id)
@@ -531,6 +532,16 @@ contains
             width = 2
             do i = 1, size(value)
                 value(i) = decode_attribute_i32(ncid, varid, attribute_id, i, width)
+            end do
+        case (NF90_INT64)
+            do i = 1, size(value)
+                wide = decode_attribute_i64(ncid, varid, attribute_id, i)
+                if (wide < int(-huge(value(i)) - 1, int64) .or. &
+                    wide > int(huge(value(i)), int64)) then
+                    code = NF90_ERANGE
+                    return
+                end if
+                value(i) = int(wide, int32)
             end do
         case default
             code = NF90_EINVAL
@@ -587,6 +598,10 @@ contains
             do i = 1, size(value)
                 value(i) = real(decode_attribute_i32(ncid, varid, attribute_id, i, &
                     type_width_compat(attribute_type(ncid, varid, attribute_id))), real64)
+            end do
+        case (NF90_INT64)
+            do i = 1, size(value)
+                value(i) = real(decode_attribute_i64(ncid, varid, attribute_id, i), real64)
             end do
         case default
             code = NF90_EINVAL
@@ -1864,6 +1879,19 @@ contains
         if (width == 2 .and. value >= 32768) value = value - 65536
         if (width == 1 .and. value >= 128) value = value - 256
     end function decode_attribute_i32
+
+    integer(int64) function decode_attribute_i64(ncid, varid, attribute_id, element) &
+            result(value)
+        integer, intent(in) :: ncid, varid, attribute_id, element
+        integer(int8) :: bytes8(8)
+        integer :: i
+
+        do i = 1, 8
+            bytes8(i) = int(attribute_byte(ncid, varid, attribute_id, &
+                8*(element - 1) + i), int8)
+        end do
+        value = decode_be_i64(bytes8)
+    end function decode_attribute_i64
 
     pure integer function type_width_compat(type_code) result(width)
         integer, intent(in) :: type_code
