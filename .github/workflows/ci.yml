@@ -30,6 +30,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Run ordinary consumer test suite
+        # The runner container runs as root; consumer MPI tests start mpiexec.
+        env:
+          OMPI_ALLOW_RUN_AS_ROOT: "1"
+          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
         run: python3 ci/test_downstreams.py
 
   gfortran:
@@ -39,8 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install compiler and independent format oracles
-        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools
-      - uses: fortran-lang/setup-fpm@a03b5f81f16417c937a31b745eeb866c5a26a7a0 # v10
+        run: sudo apt-get update && sudo apt-get install -y gfortran netcdf-bin python3-h5py hdf5-tools python3-venv
+      # fpm from PyPI: setup-fpm downloads a GitHub release binary on every run.
+      - name: Install fpm
+        run: |
+          python3 -m venv "$RUNNER_TEMP/fpm"
+          "$RUNNER_TEMP/fpm/bin/pip" install fpm==0.12.0
+          # Only fpm on PATH; the format oracles use the system python3 with h5py.
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$RUNNER_TEMP/fpm/bin/fpm" "$RUNNER_TEMP/bin/fpm"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Build
         run: fpm build
       - name: Test
