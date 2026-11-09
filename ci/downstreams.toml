@@ -21,7 +21,7 @@ commands = [
 [[consumer]]
 name = "neo2"
 repository = "https://github.com/itpplasma/NEO-2.git"
-revision = "a46f0e6408f9473fca6d727d4e14c21da0921754"
+revision = "2bff277fe4ffa02f58aedaa4e5e43f8f04ed6009"
 packages = [
   "cmake", "g++", "gcc", "gfortran", "git", "jq", "libevent-dev",
   "libfftw3-dev", "libgsl-dev", "libhwloc-dev", "liblapack-dev",
