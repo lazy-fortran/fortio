@@ -11,7 +11,6 @@ build or temporary directory and are ignored by git.
 Before submitting a change:
 
 ```sh
-fo
 cmake -S . -B build-cmake -DFORTIO_BUILD_TESTING=ON
 cmake --build build-cmake --parallel
 ctest --test-dir build-cmake --output-on-failure
