@@ -131,6 +131,15 @@ if(FORTIO_BUILD_TESTING)
         target_link_options(test_posix_transfers PRIVATE
             "-Wl,--wrap=pread" "-Wl,--wrap=pwrite")
         add_test(NAME posix_transfers COMMAND test_posix_transfers)
+
+        add_executable(test_hdf5_close_writes test/test_hdf5_close_writes.f90
+            test/pwrite_counter.c)
+        target_compile_definitions(test_hdf5_close_writes PRIVATE
+            FORTIO_PWRITE_COUNTER_TEST)
+        target_link_libraries(test_hdf5_close_writes PRIVATE fortio)
+        target_link_options(test_hdf5_close_writes PRIVATE "-Wl,--wrap=pwrite")
+        add_test(NAME hdf5_close_writes COMMAND test_hdf5_close_writes
+            "${CMAKE_CURRENT_BINARY_DIR}/hdf5-close-writes.h5")
     endif()
 
     add_executable(test_platform_io test/test_platform_io.f90)

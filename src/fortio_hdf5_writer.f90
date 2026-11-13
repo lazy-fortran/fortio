@@ -1094,9 +1094,9 @@ contains
     subroutine hdf5_writer_close(this, status)
         class(hdf5_writer_t), intent(inout) :: this
         type(fortio_status_t), intent(inout) :: status
-        integer(int8), allocatable :: metadata(:)
+        integer(int8), allocatable :: metadata(:), payload(:)
         integer(int64) :: next_address, eof_address, heap_address
-        integer :: i, j, heap_count
+        integer :: i, heap_count
 
         call status%clear()
         if (.not. this%opened) return
@@ -1188,30 +1188,15 @@ contains
             case (TYPE_I8)
                 call this%output%write_bytes(this%datasets(i)%values_i8, status)
                 if (.not. status%ok()) return
-            case (TYPE_I32)
-                do j = 1, size(this%datasets(i)%values_i32)
-                    call this%output%write_le_i32(this%datasets(i)%values_i32(j), status)
-                    if (.not. status%ok()) return
-                end do
-            case (TYPE_I64)
-                do j = 1, size(this%datasets(i)%values_i64)
-                    call this%output%write_le_i64(this%datasets(i)%values_i64(j), status)
-                    if (.not. status%ok()) return
-                end do
+            case (TYPE_I32, TYPE_I64, TYPE_R32, TYPE_TEXT)
+                ! One write per dataset: a write per element made closing a file
+                ! with large 32-bit datasets cost one system call per value.
+                call encode_dataset_bytes(this%datasets(i), payload)
+                call this%output%write_bytes(payload, status)
+                if (.not. status%ok()) return
             case (TYPE_R64)
                 call this%output%write_le_r64_array(this%datasets(i)%values_r64, status)
                 if (.not. status%ok()) return
-            case (TYPE_R32)
-                do j = 1, size(this%datasets(i)%values_r32)
-                    call this%output%write_le_r32(this%datasets(i)%values_r32(j), status)
-                    if (.not. status%ok()) return
-                end do
-            case (TYPE_TEXT)
-                do j = 1, len(this%datasets(i)%value_text)
-                    call this%output%write_i8( &
-                        int(iachar(this%datasets(i)%value_text(j:j)), int8), status)
-                    if (.not. status%ok()) return
-                end do
             case (TYPE_C64)
                 call this%output%write_le_c64_array(this%datasets(i)%values_c64, status)
                 if (.not. status%ok()) return
@@ -1257,38 +1242,38 @@ contains
         type(hdf5_output_dataset_t), intent(in) :: dataset
         integer(int8), allocatable, intent(out) :: bytes(:)
         real(real64), allocatable :: complex_components(:)
-        integer :: i
+        integer(int64) :: i
 
         select case (dataset%type_code)
         case (TYPE_I8)
             bytes = dataset%values_i8
         case (TYPE_I32)
             bytes = transfer(dataset%values_i32, 0_int8, &
-                size=4*size(dataset%values_i32))
+                size=4_int64*size(dataset%values_i32, kind=int64))
             call convert_native_to_little_endian(bytes, 4)
         case (TYPE_I64)
             bytes = transfer(dataset%values_i64, 0_int8, &
-                size=8*size(dataset%values_i64))
+                size=8_int64*size(dataset%values_i64, kind=int64))
             call convert_native_to_little_endian(bytes, 8)
         case (TYPE_R64)
             bytes = transfer(dataset%values_r64, 0_int8, &
-                size=8*size(dataset%values_r64))
+                size=8_int64*size(dataset%values_r64, kind=int64))
             call convert_native_to_little_endian(bytes, 8)
         case (TYPE_R32)
             bytes = transfer(dataset%values_r32, 0_int8, &
-                size=4*size(dataset%values_r32))
+                size=4_int64*size(dataset%values_r32, kind=int64))
             call convert_native_to_little_endian(bytes, 4)
         case (TYPE_TEXT)
             allocate(bytes(0))
             call append_text(bytes, dataset%value_text)
         case (TYPE_C64)
-            allocate(complex_components(2*size(dataset%values_c64)))
-            do i = 1, size(dataset%values_c64)
+            allocate(complex_components(2_int64*size(dataset%values_c64, kind=int64)))
+            do i = 1, size(dataset%values_c64, kind=int64)
                 complex_components(2*i - 1) = real(dataset%values_c64(i), real64)
                 complex_components(2*i) = aimag(dataset%values_c64(i))
             end do
             bytes = transfer(complex_components, 0_int8, &
-                size=8*size(complex_components))
+                size=8_int64*size(complex_components, kind=int64))
             call convert_native_to_little_endian(bytes, 8)
         end select
     end subroutine encode_dataset_bytes
@@ -1297,11 +1282,12 @@ contains
         integer(int8), intent(inout) :: bytes(:)
         integer, intent(in) :: element_size
         integer(int8) :: native_one(4), temporary
-        integer :: element, first, left, right
+        integer(int64) :: element, first
+        integer :: left, right
 
         native_one = transfer(1_int32, native_one)
         if (native_one(1) == 1_int8) return
-        do element = 1, size(bytes)/element_size
+        do element = 1, size(bytes, kind=int64)/element_size
             first = (element - 1)*element_size
             do left = 1, element_size/2
                 right = element_size - left + 1
