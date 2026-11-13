@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "Please cite the archived release used in your work."
+type: software
+title: Fortio
+abstract: >-
+  A Fortran library for a defined subset of NetCDF and HDF5, with native
+  file access, migration adapters, compression and ZIP output.
+authors:
+  - family-names: Albert
+    given-names: Christopher
+repository-code: "https://github.com/lazy-fortran/fortio"
+url: "https://lazy-fortran.github.io/fortio/"
+license: MIT

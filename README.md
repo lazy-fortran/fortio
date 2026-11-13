@@ -1,15 +1,15 @@
 # Fortio
 
-Fortio is an MIT-licensed Fortran library for the NetCDF and HDF5 subset used
-by NEO-2, NEO-RT, libneo, KAMEL, SIMPLE, MEPHIT, and Rabe. It reads and writes
-the required formats without linking NetCDF, HDF5, zlib, or another compression
+Fortio is an MIT-licensed Fortran library for a defined subset of NetCDF and
+HDF5. It reads and writes these formats without linking NetCDF, HDF5, zlib,
+or another compression
 library.
 
 Fortio provides:
 
 - a typed native API for new code;
-- the required `nf90_*`, `hdf5_tools`, and HDF5-Lite migration adapters;
-- CDF-1, CDF-2, and the required NetCDF-4/HDF5 layouts;
+- `nf90_*`, `hdf5_tools`, and HDF5-Lite migration adapters;
+- CDF-1, CDF-2, and the documented NetCDF-4/HDF5 layouts;
 - an internal Deflate codec shared by HDF5, NetCDF-4, and ZIP output;
 - thread-safe independent handles and serialized same-path updates;
 - fpm and installed or fetched CMake consumption.
@@ -35,12 +35,17 @@ if (.not. status%ok()) error stop status%message
 
 Documentation: <https://lazy-fortran.github.io/fortio/>
 
+- [Build from source](docs/installation.md#build-from-source)
 - [Choose the native or migration API](docs/choosing-an-api.md)
 - [Install with fpm or CMake](docs/installation.md)
 - [Review the exact compatibility boundary](docs/compatibility.md)
 - [Understand the thread-safety contract](docs/thread-safety.md)
 - [Run the enforced performance comparisons](docs/performance.md)
+- [Review verification and limitations](docs/status.md)
+- [Find the public modules](docs/modules.md)
 
 System NetCDF/HDF5 tools and Python readers are independent test oracles.
 System NetCDF/HDF5 libraries are used only by optional native performance
 comparisons.
+
+For citation metadata, see [CITATION.cff](CITATION.cff).
