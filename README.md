@@ -1,5 +1,7 @@
 # Fortio
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24223513.svg)](https://doi.org/10.5281/zenodo.24223513)
+
 Fortio is an MIT-licensed Fortran library for a defined subset of NetCDF and
 HDF5. It reads and writes these formats without linking NetCDF, HDF5, zlib,
 or another compression
@@ -49,3 +51,11 @@ System NetCDF/HDF5 libraries are used only by optional native performance
 comparisons.
 
 For citation metadata, see [CITATION.cff](CITATION.cff).
+
+## Citation
+
+Cite fortio through its Zenodo record,
+[doi:10.5281/zenodo.24223513](https://doi.org/10.5281/zenodo.24223513), which
+always resolves to the latest release; release 0.3.0 is
+[doi:10.5281/zenodo.24223514](https://doi.org/10.5281/zenodo.24223514).
+`CITATION.cff` holds the full citation metadata.
