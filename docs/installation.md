@@ -63,6 +63,10 @@ target_link_libraries(my_program PRIVATE fortio::fortio)
 Applications that need reproducible builds should pin the release tag or its
 commit, not `main`.
 
+Fortio's tests are not part of a consumer's build, and Fortio leaves the
+consumer's `BUILD_TESTING` and CTest setup alone. To run its tests there, pass
+`-DFORTIO_BUILD_TESTING=ON` and call `include(CTest)` in the consumer.
+
 The fpm and FetchContent examples use the published v0.2.0 release.
 Documentation in a source checkout describes that checkout, which may include
 changes since the release.
@@ -80,6 +84,9 @@ cmake -S . -B build -DFORTIO_BUILD_TESTING=ON
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
+
+Tests are on by default when Fortio is the top-level project;
+`-DBUILD_TESTING=OFF` turns them off as well.
 
 Set `FORTIO_BUILD_BENCHMARKS=ON` to build comparisons against system NetCDF and
 HDF5. See [Performance](performance.html) for the enforced workloads.
