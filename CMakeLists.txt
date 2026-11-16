@@ -7,6 +7,20 @@ option(FORTIO_BUILD_BENCHMARKS "Build comparisons against system NetCDF/HDF5" OF
 option(FORTIO_BUILD_TESTING "Build fortio tests" ${PROJECT_IS_TOP_LEVEL})
 option(FORTIO_INSTALL "Install fortio targets and package files" ${PROJECT_IS_TOP_LEVEL})
 
+# Consumers get fortio's tests only on request: -DFORTIO_BUILD_TESTING=ON plus
+# include(CTest) in the consumer.
+if(PROJECT_IS_TOP_LEVEL)
+    include(CTest)
+endif()
+if(FORTIO_BUILD_TESTING AND NOT BUILD_TESTING)
+    message(STATUS "FORTIO_BUILD_TESTING is ON, but BUILD_TESTING is OFF; "
+        "fortio tests will not be built.")
+    set(FORTIO_BUILD_TESTING OFF)
+endif()
+if(FORTIO_BUILD_TESTING)
+    enable_testing()
+endif()
+
 add_library(fortio
     src/fortio_posix_io.c
     src/fortio_posix.f90
@@ -97,7 +111,6 @@ if(FORTIO_BUILD_BENCHMARKS)
     target_link_libraries(benchmark_native_hdf5_append PRIVATE ${HDF5_Fortran_LIBRARIES})
 endif()
 
-include(CTest)
 if(FORTIO_BUILD_TESTING)
     find_package(OpenMP REQUIRED COMPONENTS Fortran)
     add_executable(test_checksum test/test_checksum.f90)
