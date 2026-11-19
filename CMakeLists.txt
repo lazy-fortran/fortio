@@ -214,6 +214,11 @@ if(FORTIO_BUILD_TESTING)
     add_test(NAME netcdf4_large_header COMMAND test_netcdf4_large_header
         "${CMAKE_CURRENT_BINARY_DIR}/large-header.nc")
 
+    add_executable(test_netcdf4_many_variables test/test_netcdf4_many_variables.f90)
+    target_link_libraries(test_netcdf4_many_variables PRIVATE fortio)
+    add_test(NAME netcdf4_many_variables COMMAND test_netcdf4_many_variables
+        "${CMAKE_CURRENT_BINARY_DIR}/many-variables.nc")
+
     add_executable(test_netcdf_characters test/test_netcdf_characters.f90)
     target_link_libraries(test_netcdf_characters PRIVATE fortio)
     add_test(NAME netcdf_characters COMMAND test_netcdf_characters
