@@ -71,6 +71,7 @@ module fortio_hdf5_writer
         integer(int64) :: size = 0_int64
     end type hdf5_free_range_t
 
+    public :: hdf5_text_attribute_fits, hdf5_i32_attribute_fits
     type, public :: hdf5_writer_t
         character(len=:), allocatable :: path
         type(byte_writer_t) :: output
@@ -820,6 +821,13 @@ contains
             call status%set(FORTIO_ENOTSUP, "HDF5 attribute name is not supported")
             return
         end if
+        ! an object header message records its size in 16 bits; larger
+        ! attributes need dense attribute storage, which is not written
+        if (attribute_payload_size(attribute) > 65535_int64) then
+            call status%set(FORTIO_ENOTSUP, &
+                "HDF5 attribute larger than 65535 bytes: "//attribute%name)
+            return
+        end if
         do i = 1, size(attributes)
             if (attributes(i)%name == attribute%name) then
                 attributes(i) = attribute
@@ -1333,7 +1341,7 @@ contains
             chunk_size = chunk_size + 4 + &
                 attribute_payload_size(groups(group_id)%attributes(i))
         end do
-        width = merge(1, 2, chunk_size <= 255)
+        width = chunk_size_width(chunk_size)
         total = 6 + width + chunk_size + 4
     end function group_header_size
 
@@ -1343,7 +1351,7 @@ contains
         integer :: width
 
         chunk_size = dataset_chunk_size(dataset)
-        width = merge(1, 2, chunk_size <= 255)
+        width = chunk_size_width(chunk_size)
         total = 6 + width + chunk_size + 4
     end function dataset_header_size
 
@@ -1417,6 +1425,30 @@ contains
             width = width + 1
         end do
     end function dimension_encoding_width
+
+    !> Whether a text attribute fits one object header message (65535 bytes).
+    logical function hdf5_text_attribute_fits(name, value) result(fits)
+        character(len=*), intent(in) :: name, value
+        type(hdf5_output_attribute_t) :: attribute
+
+        attribute%name = trim(name)
+        attribute%type_code = TYPE_TEXT
+        attribute%value_text = value
+        fits = attribute_payload_size(attribute) <= 65535_int64
+    end function hdf5_text_attribute_fits
+
+    !> Whether an int32 attribute of count values fits one header message.
+    logical function hdf5_i32_attribute_fits(name, count) result(fits)
+        character(len=*), intent(in) :: name
+        integer, intent(in) :: count
+        type(hdf5_output_attribute_t) :: attribute
+
+        attribute%name = trim(name)
+        attribute%type_code = TYPE_I32
+        allocate(attribute%values_i32(count))
+        attribute%values_i32 = 0
+        fits = attribute_payload_size(attribute) <= 65535_int64
+    end function hdf5_i32_attribute_fits
 
     integer(int64) function attribute_payload_size(attribute) result(total)
         type(hdf5_output_attribute_t), intent(in) :: attribute
@@ -1568,8 +1600,8 @@ contains
             call append_message(chunk, 12, 0, payload)
         end do
         chunk_size = size(chunk, kind=int64)
-        width = merge(1, 2, chunk_size <= 255)
-        flags = merge(0, 1, width == 1)
+        width = chunk_size_width(chunk_size)
+        flags = chunk_size_flags(width)
         allocate(bytes(0))
         call append_text(bytes, "OHDR")
         call append_u8(bytes, 2)
@@ -1696,8 +1728,8 @@ contains
             call append_message(chunk, 12, 0, payload)
         end if
         chunk_size = size(chunk, kind=int64)
-        width = merge(1, 2, chunk_size <= 255)
-        flags = merge(0, 1, width == 1)
+        width = chunk_size_width(chunk_size)
+        flags = chunk_size_flags(width)
         allocate(bytes(0))
         call append_text(bytes, "OHDR")
         call append_u8(bytes, 2)
@@ -1798,6 +1830,37 @@ contains
             call append_le32(payload, int(datasets(scale_id)%heap_index, int32))
         end do
     end function make_dimension_list_payload
+
+    !> Bytes of the version-2 object header "size of chunk #0" field.
+    pure integer function chunk_size_width(chunk_size) result(width)
+        integer(int64), intent(in) :: chunk_size
+
+        if (chunk_size <= 255_int64) then
+            width = 1
+        else if (chunk_size <= 65535_int64) then
+            width = 2
+        else if (chunk_size <= 4294967295_int64) then
+            width = 4
+        else
+            width = 8
+        end if
+    end function chunk_size_width
+
+    !> Header flags bits 0-1 that declare that width (1, 2, 4, 8 bytes).
+    pure integer function chunk_size_flags(width) result(flags)
+        integer, intent(in) :: width
+
+        select case (width)
+        case (1)
+            flags = 0
+        case (2)
+            flags = 1
+        case (4)
+            flags = 2
+        case default
+            flags = 3
+        end select
+    end function chunk_size_flags
 
     subroutine append_message(bytes, message_type, flags, payload)
         integer(int8), allocatable, intent(inout) :: bytes(:)

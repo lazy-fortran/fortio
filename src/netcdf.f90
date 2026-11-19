@@ -5,6 +5,7 @@ module netcdf
         classic_attribute_t, classic_variable_t, NC_BYTE, NC_CHAR, NC_SHORT, &
         NC_INT, NC_FLOAT, NC_DOUBLE
     use fortio_hdf5_reader, only: hdf5_file_t, hdf5_attribute_t
+    use fortio_hdf5_writer, only: hdf5_text_attribute_fits, hdf5_i32_attribute_fits
     use fortio_netcdf_writer, only: classic_writer_t
     use fortio_status, only: fortio_status_t, FORTIO_SUCCESS, FORTIO_ENOTFOUND, &
         FORTIO_ESTATE, FORTIO_ENOTSUP, FORTIO_ESHAPE, FORTIO_EEXIST, &
@@ -618,6 +619,11 @@ contains
             code = NF90_EBADID
             return
         end if
+        ! a NetCDF-4 attribute is one HDF5 header message of at most 65535 bytes
+        if (writing_netcdf4(ncid) .and. .not. hdf5_text_attribute_fits(name, trim(value))) then
+            code = NF90_ENOTSUPPORT
+            return
+        end if
         writer_varid = compatibility_writer_varid(varid)
         call writers(ncid)%put_attribute_text(writer_varid, name, trim(value), status)
         code = finish_status(status)
@@ -640,6 +646,10 @@ contains
 
         if (.not. valid_writer(ncid)) then
             code = NF90_EBADID
+            return
+        end if
+        if (writing_netcdf4(ncid) .and. .not. hdf5_i32_attribute_fits(name, size(values))) then
+            code = NF90_ENOTSUPPORT
             return
         end if
         writer_varid = compatibility_writer_varid(varid)
@@ -730,12 +740,24 @@ contains
         integer, intent(in) :: ncid, varid
         character(len=*), intent(out) :: value
         type(fortio_status_t) :: status
+        character(len=:), allocatable :: text
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
-        call files(ncid)%read_char_scalar(files(ncid)%variables(varid)%name, value, status)
+        if (netcdf4_reading(ncid)) then
+            call read_netcdf4_text(netcdf4_files(ncid), varid, text, status)
+            if (status%ok()) then
+                if (len(text) /= len(value)) then
+                    call status%set(NF90_EINVAL, "character destination shape mismatch")
+                else
+                    value = text
+                end if
+            end if
+        else
+            call files(ncid)%read_char_scalar(files(ncid)%variables(varid)%name, value, status)
+        end if
         code = finish_status(status)
     end function get_char_scalar
 
@@ -743,12 +765,29 @@ contains
         integer, intent(in) :: ncid, varid
         character(len=*), intent(out) :: value(:)
         type(fortio_status_t) :: status
+        character(len=:), allocatable :: text
+        integer :: i, n
 
         if (.not. prepare_get(ncid, varid, status)) then
             code = status%code
             return
         end if
-        call files(ncid)%read_char_1(files(ncid)%variables(varid)%name, value, status)
+        if (netcdf4_reading(ncid)) then
+            ! the fastest dimension holds the characters of one string
+            call read_netcdf4_text(netcdf4_files(ncid), varid, text, status)
+            n = len(value)
+            if (status%ok()) then
+                if (len(text) /= n*size(value)) then
+                    call status%set(NF90_EINVAL, "character destination shape mismatch")
+                else
+                    do i = 1, size(value)
+                        value(i) = text((i - 1)*n + 1:i*n)
+                    end do
+                end if
+            end if
+        else
+            call files(ncid)%read_char_1(files(ncid)%variables(varid)%name, value, status)
+        end if
         code = finish_status(status)
     end function get_char_rank1
 
@@ -1029,6 +1068,19 @@ contains
         end do
         call file%hdf5%read_numeric_r64_flat(file%variables(varid)%name, values, status)
     end subroutine read_netcdf4_r64_flat
+
+    subroutine read_netcdf4_text(file, varid, text, status)
+        type(netcdf4_file_t), intent(inout) :: file
+        integer, intent(in) :: varid
+        character(len=:), allocatable, intent(out) :: text
+        type(fortio_status_t), intent(inout) :: status
+
+        if (file%variables(varid)%type_code /= NF90_CHAR) then
+            call status%set(NF90_EINVAL, "variable is not character data")
+            return
+        end if
+        call file%hdf5%read_text_flat(file%variables(varid)%name, text, status)
+    end subroutine read_netcdf4_text
 
     subroutine convert_r64_array_to_i32(values, converted, status)
         real(real64), intent(in) :: values(:)
@@ -1560,6 +1612,8 @@ contains
         if (type_class == 0 .and. element_size == 4) type_code = NF90_INT
         if (type_class == 1 .and. element_size == 4) type_code = NF90_FLOAT
         if (type_class == 1 .and. element_size == 8) type_code = NF90_DOUBLE
+        ! NC_CHAR is a one-byte fixed-width HDF5 string
+        if (type_class == 3 .and. element_size == 1) type_code = NF90_CHAR
     end function netcdf4_type_code
 
     integer function netcdf4_variable_id(file, name) result(variable_id)

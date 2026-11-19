@@ -209,6 +209,11 @@ if(FORTIO_BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/hyperslab-oracle.nc"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/oracle.cdl")
 
+    add_executable(test_netcdf4_large_header test/test_netcdf4_large_header.f90)
+    target_link_libraries(test_netcdf4_large_header PRIVATE fortio)
+    add_test(NAME netcdf4_large_header COMMAND test_netcdf4_large_header
+        "${CMAKE_CURRENT_BINARY_DIR}/large-header.nc")
+
     add_executable(test_netcdf_characters test/test_netcdf_characters.f90)
     target_link_libraries(test_netcdf_characters PRIVATE fortio)
     add_test(NAME netcdf_characters COMMAND test_netcdf_characters

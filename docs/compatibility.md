@@ -28,7 +28,8 @@ The `netcdf` module provides the required overloads of:
 
 - file creation, opening, closing, and define/data-mode transitions;
 - dimension, variable, group, and attribute definition and inquiry;
-- whole-variable and required hyperslab `nf90_get_var`/`nf90_put_var`;
+- whole-variable and required hyperslab `nf90_get_var`/`nf90_put_var`,
+  including character variables of classic and NetCDF-4 files;
 - `nf90_def_var_deflate` for the SIMPLE whole-variable chunk layout;
 - error codes and `nf90_strerror`.
 
@@ -58,6 +59,9 @@ the ITP files.
 - arbitrary HDF5 compound and variable-length types;
 - external, soft, and virtual links;
 - arbitrary chunk indexes and plugin filters;
+- HDF5 dense attribute storage when writing: a NetCDF-4 attribute above the
+  65535 bytes of one object header message is rejected by `nf90_put_att`
+  (`NF90_ENOTSUPPORT`); large text belongs in a character variable;
 - MPI-I/O and parallel HDF5;
 - ZIP64, encrypted ZIP, and multi-disk ZIP;
 - CDF-5, CSV, Parquet, Zstd, LZO, and LZ4.

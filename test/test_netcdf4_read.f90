@@ -8,6 +8,9 @@ program test_netcdf4_read
 
     character(len=1024) :: fixture, cdl, command
     character(len=16) :: convention, units
+    character(len=11) :: label
+    character(len=5) :: mode_name(2)
+    character(len=10) :: short_label
     integer(int32) :: count, indices(2), integer_radius_values(3), factor
     real(real64) :: radius(3), radius_values(3), coefficients(3, 2), flattened(6), &
         torflux, real_count, real_factor
@@ -99,5 +102,18 @@ program test_netcdf4_read
     if (nf90_get_att(ncid, NF90_GLOBAL, "wide_count", real_factor) /= NF90_NOERR) &
         error stop "NetCDF-4 wide int64 attribute read as real64 failed"
     if (real_factor /= 3.0e9_real64) error stop "NetCDF-4 wide int64 attribute differs"
+    if (nf90_inq_varid(ncid, "label", varid) /= NF90_NOERR) &
+        error stop "NetCDF-4 character variable lookup failed"
+    if (nf90_get_var(ncid, varid, label) /= NF90_NOERR) &
+        error stop "NetCDF-4 character variable read failed"
+    if (label /= "fortio text") error stop "NetCDF-4 text differs from ncgen oracle"
+    if (nf90_get_var(ncid, varid, short_label) /= NF90_EINVAL) &
+        error stop "NetCDF-4 text into a shorter destination was accepted"
+    if (nf90_inq_varid(ncid, "mode_name", varid) /= NF90_NOERR) &
+        error stop "NetCDF-4 string array lookup failed"
+    if (nf90_get_var(ncid, varid, mode_name) /= NF90_NOERR) &
+        error stop "NetCDF-4 string array read failed"
+    if (mode_name(1) /= "alpha" .or. mode_name(2) /= "beta") &
+        error stop "NetCDF-4 string array differs from ncgen oracle"
     if (nf90_close(ncid) /= NF90_NOERR) error stop "NetCDF-4 oracle close failed"
 end program test_netcdf4_read

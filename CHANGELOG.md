@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+- Read NetCDF-4 character variables through `nf90_get_var`.
+- Write object headers whose messages exceed 65535 bytes in total with the
+  wider chunk-size field, and read message sizes and counts of 32768 and
+  above as unsigned; such headers were corrupt and unreadable before.
+- Reject a NetCDF-4 attribute that does not fit one header message instead of
+  writing a corrupt file.
+
 ## 0.3.0 (2026-11-14)
 - Add citation metadata, a module overview and a description of verification
   coverage and limitations.

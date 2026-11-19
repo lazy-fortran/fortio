@@ -91,6 +91,7 @@ module fortio_hdf5_reader
         procedure :: read_c64_3 => hdf5_read_c64_3
         procedure :: read_i32_attribute => hdf5_read_i32_attribute
         procedure :: read_text_scalar => hdf5_read_text_scalar
+        procedure :: read_text_flat => hdf5_read_text_flat
         procedure :: exists => hdf5_exists
         procedure :: describe => hdf5_describe
         procedure :: list_children => hdf5_list_children
@@ -489,6 +490,31 @@ contains
             value(i:i) = achar(byte_value(byte))
         end do
     end subroutine hdf5_read_text_scalar
+
+    !> All characters of a fixed-width string dataset of any rank and filter,
+    !> elements in storage order, each element_size characters wide.
+    subroutine hdf5_read_text_flat(this, path, value, status)
+        class(hdf5_file_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable, intent(out) :: value
+        type(fortio_status_t), intent(inout) :: status
+        type(hdf5_dataset_t) :: dataset
+        integer(int8), allocatable :: bytes(:)
+        integer :: i
+
+        call find_dataset(this, path, dataset, status)
+        if (.not. status%ok()) return
+        if (dataset%type_class /= H5_TYPE_STRING) then
+            call status%set(FORTIO_ETYPE, "dataset is not a fixed-width string")
+            return
+        end if
+        call read_dataset_bytes(this, dataset, bytes, status)
+        if (.not. status%ok()) return
+        allocate(character(len=size(bytes)) :: value)
+        do i = 1, size(bytes)
+            value(i:i) = achar(byte_value(bytes(i)))
+        end do
+    end subroutine hdf5_read_text_flat
 
     subroutine hdf5_exists(this, path, exists, status)
         class(hdf5_file_t), intent(inout) :: this
@@ -1278,7 +1304,7 @@ contains
             call this%reader%read_le_i32(message_flags, status)
             if (.not. status%ok()) return
             data_start = this%reader%position
-            next_message = data_start + int(message_size_i16, int64)
+            next_message = data_start + iand(int(message_size_i16, int64), 65535_int64)
             if (message_type_i16 == 0) then
                 call this%reader%seek(next_message)
                 cycle
@@ -1340,7 +1366,7 @@ contains
             call this%reader%read_le_i32(message_flags, status)
             if (.not. status%ok()) return
             data_start = this%reader%position
-            next_message = data_start + int(message_size_i16, int64)
+            next_message = data_start + iand(int(message_size_i16, int64), 65535_int64)
             ! Continuation chunks may reserve the first message slot for a
             ! chained continuation and leave a null padding message before
             ! the actual payload.  Unlike the primary chunk, a null here does
@@ -1398,7 +1424,7 @@ contains
                 "only level-zero HDF5 legacy symbol tables are supported")
             return
         end if
-        entry_count = int(entry_count_i16)
+        entry_count = iand(int(entry_count_i16), 65535)
         call skip_bytes(this%reader, 2_int64*this%offset_size)
         do i = 1, entry_count
             call read_unsigned(this%reader, this%offset_size, ignored_key, status)
@@ -1433,7 +1459,7 @@ contains
             call status%set(FORTIO_ENOTSUP, "HDF5 legacy symbol node version is not supported")
             return
         end if
-        entry_count = int(entry_count_i16)
+        entry_count = iand(int(entry_count_i16), 65535)
         do i = 1, entry_count
             call read_unsigned(this%reader, this%offset_size, name_offset, status)
             call read_unsigned(this%reader, this%offset_size, object_address, status)
@@ -1534,7 +1560,7 @@ contains
             message_type = byte_value(type_byte)
             if (btest(header_flags, 2)) call skip_bytes(this%reader, 2_int64)
             data_start = this%reader%position
-            next_message = data_start + int(size_value, int64)
+            next_message = data_start + iand(int(size_value, int64), 65535_int64)
             select case (message_type)
             case (H5_MSG_LINK_INFO)
                 if (want_links) call parse_link_info_message(this, links, status)
