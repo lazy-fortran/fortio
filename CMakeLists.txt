@@ -45,6 +45,7 @@ add_library(fortio
     src/fortio_netcdf_classic.f90
     src/fortio_netcdf_writer.f90
     src/fortio_h5read.f90
+    src/fortio_h5write.f90
     src/fortio_hdf5_reader.f90
     src/fortio_hdf5_writer.f90
     src/fortio_zip.f90
@@ -151,6 +152,11 @@ if(FORTIO_BUILD_TESTING)
     add_test(NAME h5read COMMAND test_h5read
         "${CMAKE_CURRENT_BINARY_DIR}/h5read"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/h5read_oracle.py")
+    add_executable(test_h5write test/test_h5write.f90)
+    target_link_libraries(test_h5write PRIVATE fortio)
+    add_test(NAME h5write COMMAND test_h5write
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-h5write.nc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/h5write_oracle.py")
 
     add_executable(test_xml test/test_xml.f90)
     target_link_libraries(test_xml PRIVATE fortio)
