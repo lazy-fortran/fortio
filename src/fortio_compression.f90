@@ -28,7 +28,7 @@ contains
             call status%set(FORTIO_EIO, "compression level must be between zero and nine")
             return
         end if
-        call zlib_compress_into(input, size(input), output, output_size)
+        call zlib_compress_into(input, size(input), output, output_size, selected_level)
     end subroutine compress_zlib
 
     subroutine decompress_zlib(input, output, status, expected_size)

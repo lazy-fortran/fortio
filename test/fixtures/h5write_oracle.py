@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Independent h5py and netCDF4 check of a file written by the Fortio HDF5 writer."""
 
+import os
 import subprocess
 import sys
 
@@ -38,6 +39,13 @@ with h5py.File(path, "r") as f:
     c = g["compressed"]
     check(c.compression == "gzip" and c.shape == (50, 100), "deflate dataset")
     check(np.array_equal(c[()].ravel(), np.arange(1, 5001) % 7), "deflate values")
+    k = g["chunked"]
+    expected = ((np.arange(1, 3 * 700 * 700 + 1) % 1009) / 7).reshape(3, 700, 700)
+    check(k.shuffle and k.compression == "gzip" and k.chunks != k.shape, f"chunks {k.chunks}")
+    check(np.array_equal(k[()], expected), "chunked values")
+    check(np.array_equal(k[1, 600:, 3], expected[1, 600:, 3]), "chunked slice")
+    m = g["chunked_int"]
+    check(not m.shuffle and np.array_equal(m[()], np.arange(1, 5000001) % 65537), "chunked int32")
     p = g["profiles_1d"]
     check(p.shape == () and p.dtype.kind == "S" and p.dtype.itemsize == 1, "placeholder")
 
@@ -53,6 +61,14 @@ with netCDF4.Dataset(path, "r") as ds:
     check(g["ids_properties.comment"][...] == "é text with UTF-8", "netCDF scalar string")
     check(g["profiles_1d"].documentation == "Core plasma profiles", "netCDF char variable")
     check(np.array_equal(g["compressed"][:].ravel(), np.arange(1, 5001) % 7), "netCDF deflate")
+    # netCDF-C picks the same chunks for the same variables
+    with netCDF4.Dataset(os.path.join(os.path.dirname(path) or ".", "chunk-oracle.nc"), "w") as ref:
+        for name, dims in (("chunked", (3, 700, 700)), ("chunked_int", (5000000,))):
+            names = [f"{name}{i}" for i in range(len(dims))]
+            for n, d in zip(names, dims):
+                ref.createDimension(n, d)
+            v = ref.createVariable(name, "f8" if name == "chunked" else "i4", names, zlib=True)
+            check(v.chunking() == list(g[name].chunking()), f"netCDF-C chunks {name}")
     c = g["named_complex"][:]
     check(complex(c[0]["r"], c[0]["i"]) == 3 + 1.5j, "netCDF compound")
 subprocess.run(["ncdump", "-h", path], check=True, capture_output=True)

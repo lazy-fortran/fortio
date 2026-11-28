@@ -1,5 +1,5 @@
 program test_deflate
-    use, intrinsic :: iso_fortran_env, only: int8, real64
+    use, intrinsic :: iso_fortran_env, only: int8, int64, real64
     use fortio_compression, only: compress_zlib, decompress_zlib
     use fortio_deflate, only: deflate_compress, deflate_uncompress, shuffle_bytes, &
         unshuffle_bytes
@@ -37,6 +37,7 @@ program test_deflate
 
     call check_stored_block()
     call check_empty_stream()
+    call check_encoder_blocks()
 
     call get_command_argument(1, compressed_path)
     call get_command_argument(2, raw_path)
@@ -69,6 +70,38 @@ contains
         if (.not. st%ok()) error stop trim(st%message)
         if (size(decoded) /= 0) error stop "empty zlib stream decodes to bytes"
     end subroutine check_empty_stream
+    !> Inputs that make the encoder choose stored, fixed and dynamic blocks, high bytes
+    !> and long runs included, decoded by the independent Fortran decoder.
+    subroutine check_encoder_blocks()
+        integer(int8), allocatable :: data(:), packed(:), decoded(:)
+        type(fortio_status_t) :: st
+        integer :: sizes(7) = [1, 3, 5, 300, 5000, 70000, 300000]
+        integer :: alphabets(4) = [2, 16, 128, 256]
+        integer :: is, ia, lv, k, v
+        integer(int64) :: seed
+
+        seed = 12345
+        do is = 1, size(sizes)
+            do ia = 1, size(alphabets)
+                allocate (data(sizes(is)))
+                do k = 1, sizes(is)
+                    seed = mod(seed * 6364136223846793005_int64 + 1442695040888963407_int64, &
+                        huge(seed))
+                    v = 255 - int(mod(abs(seed / 65536), int(alphabets(ia), int64)))
+                    data(k) = int(merge(v - 256, v, v > 127), int8)
+                end do
+                do lv = 1, 9, 4
+                    call compress_zlib(data, packed, st, level=lv)
+                    if (.not. st%ok()) error stop trim(st%message)
+                    call decompress_zlib(packed, decoded, st)
+                    if (.not. st%ok()) error stop trim(st%message)
+                    if (size(decoded) /= size(data)) error stop "encoder: decoded size differs"
+                    if (any(decoded /= data)) error stop "encoder: decoded bytes differ"
+                end do
+                deallocate (data)
+            end do
+        end do
+    end subroutine check_encoder_blocks
 
     subroutine read_file(path, bytes)
         character(len=*), intent(in) :: path

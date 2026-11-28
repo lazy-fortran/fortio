@@ -3,10 +3,12 @@
 !> Raw data go to the file as they are written; groups, object headers, attributes and
 !> the global heap of variable-length data are laid out when the file is closed. The
 !> file uses superblock version 2 and version-2 object headers with compact link and
-!> attribute storage, as HDF5 1.8 and later read them. Datasets are contiguous.
+!> attribute storage, as HDF5 1.8 and later read them. Datasets are contiguous, or
+!> chunked like netCDF-C with deflate (`set_deflate`).
 !> Values are given in file element order (last dimension fastest) with their
 !> dimensions; a dataset without dimensions is a scalar.
 module fortio_h5write
+    use, intrinsic :: iso_c_binding, only: c_f_pointer, c_loc
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real64
     use fortio_status, only: fortio_status_t, FORTIO_EEXIST, FORTIO_ENOTFOUND, FORTIO_ESTATE, &
         FORTIO_ESHAPE, FORTIO_ENOTSUP
@@ -14,6 +16,7 @@ module fortio_h5write
     use fortio_bytes, only: byte_writer_t
     use fortio_checksum, only: lookup3_checksum
     use fortio_compression, only: compress_zlib
+    use fortio_deflate, only: shuffle_bytes
     implicit none
     private
 
@@ -44,9 +47,13 @@ module fortio_h5write
         integer(int64), allocatable :: dims(:)
         integer(int64) :: element_size = 0
         integer(int64) :: data_address = UNDEFINED
-        !> Deflate level of a single-chunk dataset, 0 for contiguous storage.
+        !> Deflate level of a chunked dataset, 0 for contiguous storage.
         integer :: deflate = 0
+        logical :: shuffle = .false.
         integer(int64) :: stored_size = 0
+        !> Chunk dimensions; more than one chunk uses a fixed-array index at index_address.
+        integer(int64), allocatable :: chunk(:)
+        integer(int64) :: index_address = UNDEFINED
         type(string_t), allocatable :: vstrings(:)
         integer(int64), allocatable :: heap_ids(:, :)
         type(wattr_t), allocatable :: attrs(:)
@@ -64,6 +71,7 @@ module fortio_h5write
         integer :: nobjs = 0
         integer :: next_dimid = 0
         integer :: deflate = 0
+        logical :: shuffle = .false.
     contains
         procedure :: create => writer_create
         procedure :: close => writer_close
@@ -345,7 +353,9 @@ contains
         idx = this%add_object(path, GROUP, status)
     end subroutine writer_create_group
 
-    !> New dataset with its element bytes written at the end of the raw data.
+    !> New dataset with its element bytes written at the end of the raw data. With
+    !> deflate the data are cut into the chunks netCDF-C would choose, and each chunk
+    !> is compressed and written on its own, so only one chunk is held at a time.
     subroutine add_dataset(this, path, dtype, element_size, dims, raw, status, shared_type)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
@@ -355,7 +365,6 @@ contains
         integer(int8), intent(in), contiguous :: raw(:)
         type(fortio_status_t), intent(inout) :: status
         integer, intent(in), optional :: shared_type
-        integer(int8), allocatable :: packed(:)
         integer :: idx
 
         if (product(dims) * element_size /= size(raw, kind=int64)) then
@@ -372,18 +381,142 @@ contains
         this%objs(idx)%data_address = this%eof
         call this%out%seek(this%eof + 1)
         if (this%deflate > 0 .and. size(dims) > 0) then
-            ! one chunk spanning the dataset, compressed with deflate
-            call compress_zlib(raw, packed, status, level=this%deflate)
-            if (.not. status%ok()) return
-            this%objs(idx)%deflate = this%deflate
-            this%objs(idx)%stored_size = size(packed, kind=int64)
-            call this%out%write_bytes(packed, status)
+            call write_chunks(this, this%objs(idx), raw, status)
         else
             this%objs(idx)%stored_size = size(raw, kind=int64)
             call this%out%write_bytes(raw, status)
+            this%eof = this%eof + this%objs(idx)%stored_size
         end if
-        this%eof = this%eof + this%objs(idx)%stored_size
     end subroutine add_dataset
+
+    !> Chunk dimensions of netCDF-C (`nc4_find_default_chunksizes2` with its default
+    !> DEFAULT_CHUNK_SIZE of 16 MiB): about 16 MiB per
+    !> chunk with the dimensions scaled alike, then shrunk so that the edge chunks
+    !> overhang as little as possible.
+    pure function default_chunks(dims, element_size) result(chunk)
+        integer(int64), intent(in) :: dims(:), element_size
+        integer(int64) :: chunk(size(dims)), nchunks, overhang
+        real(real64) :: scale
+        integer :: d
+
+        scale = (16777216.0_real64 / (real(product(dims), real64) * real(element_size, real64))) &
+            ** (1.0_real64 / size(dims))
+        do d = 1, size(dims)
+            chunk(d) = min(dims(d), max(1_int64, int(scale * real(dims(d), real64) - 0.5_real64, int64)))
+        end do
+        do d = 1, size(dims)
+            nchunks = (dims(d) + chunk(d) - 1) / chunk(d)
+            overhang = nchunks * chunk(d) - dims(d)
+            chunk(d) = chunk(d) - overhang / nchunks
+        end do
+    end function default_chunks
+
+    subroutine write_chunks(this, o, raw, status)
+        class(h5_writer_t), intent(inout) :: this
+        type(wobj_t), intent(inout) :: o
+        integer(int8), intent(in), contiguous :: raw(:)
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8), allocatable :: buffer(:), shuffled(:), packed(:), block(:)
+        integer(int64), allocatable :: grid(:), at(:), addresses(:), sizes(:)
+        integer(int64) :: k, n, width, header
+        integer :: r, page_bits
+
+        r = size(o%dims)
+        o%deflate = this%deflate
+        o%shuffle = this%shuffle .and. o%element_size > 1
+        o%chunk = default_chunks(o%dims, o%element_size)
+        grid = (o%dims + o%chunk - 1) / o%chunk
+        n = product(grid)
+        allocate (addresses(n), sizes(n), at(r))
+        allocate (buffer(product(o%chunk) * o%element_size))
+        do k = 0, n - 1
+            call chunk_origin(k, grid, at)
+            call gather(at * o%chunk)
+            if (o%shuffle) then
+                call shuffle_bytes(buffer, int(o%element_size), shuffled)
+                call compress_zlib(shuffled, packed, status, level=o%deflate)
+            else
+                call compress_zlib(buffer, packed, status, level=o%deflate)
+            end if
+            if (.not. status%ok()) return
+            addresses(k + 1) = this%eof
+            sizes(k + 1) = size(packed, kind=int64)
+            call this%out%write_bytes(packed, status)
+            if (.not. status%ok()) return
+            this%eof = this%eof + sizes(k + 1)
+        end do
+        o%stored_size = sizes(1)
+        if (n == 1) return
+        ! fixed-array index: header, then a data block of (address, size, mask) entries
+        width = min(8_int64, 1 + (bit_length(product(o%chunk) * o%element_size) - 1 + 8) / 8)
+        page_bits = max(10, bit_length(n - 1))
+        header = this%eof
+        block = [transfer("FAHD", [0_int8]), 0_int8, 1_int8, int(8 + width + 4, int8), &
+            int(page_bits, int8), le_bytes(n, 8), le_bytes(header + 28, 8)]
+        block = [block, le_bytes(int(lookup3_checksum(block), int64), 4)]
+        call this%out%write_bytes(block, status)
+        block = [transfer("FADB", [0_int8]), 0_int8, 1_int8, le_bytes(header, 8)]
+        do k = 1, n
+            block = [block, le_bytes(addresses(k), 8), le_bytes(sizes(k), int(width)), &
+                le_bytes(0_int64, 4)]
+        end do
+        block = [block, le_bytes(int(lookup3_checksum(block), int64), 4)]
+        call this%out%write_bytes(block, status)
+        o%index_address = header
+        this%eof = header + 28 + size(block, kind=int64)
+
+    contains
+
+        !> Chunk grid position of chunk `k`, last dimension fastest.
+        pure subroutine chunk_origin(k, grid, at)
+            integer(int64), intent(in) :: k, grid(:)
+            integer(int64), intent(out) :: at(:)
+            integer(int64) :: rest
+            integer :: d
+
+            rest = k
+            do d = size(grid), 1, -1
+                at(d) = mod(rest, grid(d))
+                rest = rest / grid(d)
+            end do
+        end subroutine chunk_origin
+
+        !> Copy the chunk at element offset `origin` into `buffer`, zero beyond the edges.
+        subroutine gather(origin)
+            integer(int64), intent(in) :: origin(:)
+            integer(int64) :: idx(r), run, src, dst, stride_c, stride_d, es
+            integer :: j
+
+            es = o%element_size
+            buffer = 0_int8
+            run = min(o%chunk(r), o%dims(r) - origin(r)) * es
+            idx = 0
+            do
+                if (all(origin(1:r - 1) + idx(1:r - 1) < o%dims(1:r - 1))) then
+                    src = 0
+                    dst = 0
+                    stride_c = 1
+                    stride_d = 1
+                    do j = r, 1, -1
+                        dst = dst + idx(j) * stride_c
+                        src = src + (origin(j) + idx(j)) * stride_d
+                        stride_c = stride_c * o%chunk(j)
+                        stride_d = stride_d * o%dims(j)
+                    end do
+                    buffer(dst * es + 1:dst * es + run) = raw(src * es + 1:src * es + run)
+                end if
+                j = r - 1
+                do while (j >= 1)
+                    idx(j) = idx(j) + 1
+                    if (idx(j) < o%chunk(j)) exit
+                    idx(j) = 0
+                    j = j - 1
+                end do
+                if (j < 1) exit
+            end do
+        end subroutine gather
+
+    end subroutine write_chunks
 
     function dims_or(dims, n) result(d)
         integer(int64), intent(in), optional :: dims(:)
@@ -400,34 +533,44 @@ contains
     subroutine writer_write_real64(this, path, values, status, dims)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
-        real(real64), intent(in) :: values(:)
+        real(real64), intent(in), target, contiguous :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer(int64), intent(in), optional :: dims(:)
+        integer(int8), pointer :: view(:)
+        integer(int8), target :: none(0)
 
-        call this%add_dataset(path, dt_float64(), 8_int64, dims_or(dims, size(values)), &
-            transfer(values, [0_int8], 8 * size(values)), status)
+        ! the values are passed as their bytes, without a copy
+        view => none
+        if (size(values) > 0) call c_f_pointer(c_loc(values), view, [8 * size(values, kind=int64)])
+        call this%add_dataset(path, dt_float64(), 8_int64, dims_or(dims, size(values)), view, status)
     end subroutine writer_write_real64
 
     subroutine writer_write_int32(this, path, values, status, dims)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
-        integer(int32), intent(in) :: values(:)
+        integer(int32), intent(in), target, contiguous :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer(int64), intent(in), optional :: dims(:)
+        integer(int8), pointer :: view(:)
+        integer(int8), target :: none(0)
 
-        call this%add_dataset(path, dt_int(4, .true.), 4_int64, dims_or(dims, size(values)), &
-            transfer(values, [0_int8], 4 * size(values)), status)
+        view => none
+        if (size(values) > 0) call c_f_pointer(c_loc(values), view, [4 * size(values, kind=int64)])
+        call this%add_dataset(path, dt_int(4, .true.), 4_int64, dims_or(dims, size(values)), view, status)
     end subroutine writer_write_int32
 
     subroutine writer_write_int64(this, path, values, status, dims)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
-        integer(int64), intent(in) :: values(:)
+        integer(int64), intent(in), target, contiguous :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer(int64), intent(in), optional :: dims(:)
+        integer(int8), pointer :: view(:)
+        integer(int8), target :: none(0)
 
-        call this%add_dataset(path, dt_int(8, .true.), 8_int64, dims_or(dims, size(values)), &
-            transfer(values, [0_int8], 8 * size(values)), status)
+        view => none
+        if (size(values) > 0) call c_f_pointer(c_loc(values), view, [8 * size(values, kind=int64)])
+        call this%add_dataset(path, dt_int(8, .true.), 8_int64, dims_or(dims, size(values)), view, status)
     end subroutine writer_write_int64
 
     !> Complex values as the compound {r, i}; with `named_type` the dataset uses the
@@ -435,11 +578,13 @@ contains
     subroutine writer_write_complex(this, path, values, status, dims, named_type)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
-        complex(real64), intent(in) :: values(:)
+        complex(real64), intent(in), target, contiguous :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer(int64), intent(in), optional :: dims(:)
         character(len=*), intent(in), optional :: named_type
         integer :: shared
+        integer(int8), pointer :: view(:)
+        integer(int8), target :: none(0)
 
         shared = 0
         if (present(named_type)) then
@@ -449,8 +594,10 @@ contains
                 return
             end if
         end if
-        call this%add_dataset(path, dt_complex(), 16_int64, dims_or(dims, size(values)), &
-            transfer(values, [0_int8], 16 * size(values)), status, shared)
+        view => none
+        if (size(values) > 0) call c_f_pointer(c_loc(values), view, [16 * size(values, kind=int64)])
+        call this%add_dataset(path, dt_complex(), 16_int64, dims_or(dims, size(values)), view, &
+            status, shared)
     end subroutine writer_write_complex
 
     !> Variable-length UTF-8 strings (the NetCDF-4 string type).
@@ -476,12 +623,17 @@ contains
         this%objs(idx)%vstrings = values
     end subroutine writer_write_strings
 
-    !> Deflate level (1 to 9) for the datasets written from now on; 0 stores them contiguous.
-    subroutine writer_set_deflate(this, level)
+    !> Deflate level (1 to 9) for the datasets written from now on, 0 stores them
+    !> contiguous. With `shuffle` the bytes of each element are grouped by significance
+    !> before deflate, as netCDF4-python does by default.
+    subroutine writer_set_deflate(this, level, shuffle)
         class(h5_writer_t), intent(inout) :: this
         integer, intent(in) :: level
+        logical, intent(in), optional :: shuffle
 
         this%deflate = max(0, min(9, level))
+        this%shuffle = .false.
+        if (present(shuffle)) this%shuffle = shuffle
     end subroutine writer_set_deflate
 
     !> Scalar one-character dataset without data, the NetCDF-4 `char` variable that
@@ -981,18 +1133,38 @@ contains
                 msgs = [msgs, message(5, 1, [3_int8, 10_int8])]
                 nbytes = product(o%dims) * o%element_size
                 if (o%deflate > 0) then
-                    msgs = [msgs, message(11, 0, [2_int8, 1_int8, le_bytes(1_int64, 2), &
-                        le_bytes(0_int64, 2), le_bytes(1_int64, 2), &
-                        le_bytes(int(o%deflate, int64), 4)])]
+                    ! filter pipeline version 2: shuffle (id 2, element size), deflate (id 1)
+                    if (o%shuffle) then
+                        msgs = [msgs, message(11, 0, [2_int8, 2_int8, le_bytes(2_int64, 2), &
+                            le_bytes(0_int64, 2), le_bytes(1_int64, 2), le_bytes(o%element_size, 4), &
+                            le_bytes(1_int64, 2), le_bytes(0_int64, 2), le_bytes(1_int64, 2), &
+                            le_bytes(int(o%deflate, int64), 4)])]
+                    else
+                        msgs = [msgs, message(11, 0, [2_int8, 1_int8, le_bytes(1_int64, 2), &
+                            le_bytes(0_int64, 2), le_bytes(1_int64, 2), &
+                            le_bytes(int(o%deflate, int64), 4)])]
+                    end if
                     ! HDF5 requires the shortest encoding of the largest chunk dimension
-                    width = (bit_length(max(maxval(o%dims), o%element_size)) + 7) / 8
+                    width = (bit_length(max(maxval(o%chunk), o%element_size)) + 7) / 8
                     if (width == 0) width = 1
-                    body = [4_int8, 2_int8, 2_int8, int(size(o%dims) + 1, int8), int(width, int8)]
+                    if (o%index_address == UNDEFINED) then
+                        ! single chunk index (1), flag bit 1: the chunk is filtered
+                        body = [4_int8, 2_int8, 2_int8, int(size(o%dims) + 1, int8), int(width, int8)]
+                    else
+                        body = [4_int8, 2_int8, 0_int8, int(size(o%dims) + 1, int8), int(width, int8)]
+                    end if
                     do k = 1, size(o%dims)
-                        body = [body, le_bytes(o%dims(k), width)]
+                        body = [body, le_bytes(o%chunk(k), width)]
                     end do
-                    body = [body, le_bytes(o%element_size, width), 1_int8, le_bytes(o%stored_size, 8), &
-                        le_bytes(0_int64, 4), le_bytes(o%data_address, 8)]
+                    body = [body, le_bytes(o%element_size, width)]
+                    if (o%index_address == UNDEFINED) then
+                        body = [body, 1_int8, le_bytes(o%stored_size, 8), le_bytes(0_int64, 4), &
+                            le_bytes(o%data_address, 8)]
+                    else
+                        ! fixed array index (3) with its page bits, as written by write_chunks
+                        body = [body, 3_int8, int(max(10, bit_length(product( &
+                            (o%dims + o%chunk - 1) / o%chunk) - 1)), int8), le_bytes(o%index_address, 8)]
+                    end if
                     msgs = [msgs, message(8, 0, body)]
                 else
                     msgs = [msgs, message(8, 0, [3_int8, 1_int8, le_bytes(o%data_address, 8), &
