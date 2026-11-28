@@ -60,7 +60,7 @@ contains
             call status%set(FORTIO_EIO, "deflate compression level is invalid")
             return
         end if
-        call zlib_compress_into(input, size(input), output, output_size)
+        call zlib_compress_into(input, size(input), output, output_size, level)
     end subroutine deflate_compress
 
     subroutine deflate_uncompress(input, expected_size, output, status)

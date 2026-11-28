@@ -75,6 +75,14 @@ program test_h5write
     call h5%write("/core_profiles/0/compressed", [(real(mod(i, 7), real64), i=1, 5000)], st, &
         dims=[50_int64, 100_int64])
     call check()
+    ! larger than one netCDF-C chunk: chunked with a fixed-array index
+    call h5%set_deflate(1, shuffle=.true.)
+    call h5%write("/core_profiles/0/chunked", [(real(mod(i, 1009), real64) / 7, i=1, 3 * 700 * 700)], &
+        st, dims=[3_int64, 700_int64, 700_int64])
+    call check()
+    call h5%set_deflate(1)
+    call h5%write("/core_profiles/0/chunked_int", [(int(mod(i, 65537), int32), i=1, 5000000)], st)
+    call check()
     call h5%set_deflate(0)
     call h5%attribute("/core_profiles/0", "names", [string("a"), string("bcd")], st)
     call check()
