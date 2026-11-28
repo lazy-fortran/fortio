@@ -12,6 +12,7 @@ call sites. The generated API reference documents individual procedures.
 | `fortio` | Native file handles, typed reads, status values, compression and ZIP output |
 | `fortio_status` | Error codes and diagnostic messages |
 | `fortio_string` | `string_t` value with exact comparison, concatenation, search, split, join and shortest round-trip number text |
+| `fortio_xml` | Streaming XML 1.0 reader with lazily decoded names, attributes and text |
 | `netcdf` | Supported `nf90_*` source compatibility |
 | `hdf5_tools` | Typed helper interface used by the plasma-code consumers |
 | `h5lt` | Supported HDF5-Lite dataset inquiry |

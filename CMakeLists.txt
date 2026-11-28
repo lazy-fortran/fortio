@@ -33,6 +33,7 @@ add_library(fortio
     src/fortio_posix.f90
     src/fortio_status.f90
     src/fortio_string.f90
+    src/fortio_xml.f90
     src/fortio_checksum.f90
     src/fortio_deflate.c
     src/fortio_deflate_checksums.f90
@@ -150,6 +151,13 @@ if(FORTIO_BUILD_TESTING)
     add_test(NAME h5read COMMAND test_h5read
         "${CMAKE_CURRENT_BINARY_DIR}/h5read"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/h5read_oracle.py")
+
+    add_executable(test_xml test/test_xml.f90)
+    target_link_libraries(test_xml PRIVATE fortio)
+    add_test(NAME xml COMMAND test_xml
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-xml.xml"
+        "${CMAKE_CURRENT_BINARY_DIR}/fortio-xml.events"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/xml_oracle.py")
 
     add_executable(test_bytes test/test_bytes.f90)
     target_link_libraries(test_bytes PRIVATE fortio)
