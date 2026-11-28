@@ -185,12 +185,19 @@ contains
     end function dt_vlen_string
 
     !> Compound {r, i} of two IEEE doubles, the NetCDF and h5py complex layout.
-    function dt_complex() result(b)
+    !> Compound of two IEEE doubles named `re` and `im` (default r and i).
+    function dt_complex(re, im) result(b)
+        character(len=*), intent(in), optional :: re, im
         integer(int8), allocatable :: b(:)
+        character(len=:), allocatable :: a, c
 
+        a = "r"
+        c = "i"
+        if (present(re)) a = re
+        if (present(im)) c = im
         b = [int(54, int8), le_bytes(2_int64, 3), le_bytes(16_int64, 4), &
-             text_bytes("r"), 0_int8, 0_int8, dt_float64(), &
-             text_bytes("i"), 0_int8, 8_int8, dt_float64()]
+             text_bytes(a), 0_int8, 0_int8, dt_float64(), &
+             text_bytes(c), 0_int8, 8_int8, dt_float64()]
     end function dt_complex
 
     function dt_reference() result(b)
@@ -606,15 +613,17 @@ contains
         call this%add_dataset(path, dt_int(8, .true.), 8_int64, dims_or(dims, size(values)), view, status)
     end subroutine writer_write_int64
 
-    !> Complex values as the compound {r, i}; with `named_type` the dataset uses the
-    !> committed complex datatype at that path (see `commit_complex`).
-    subroutine writer_write_complex(this, path, values, status, dims, named_type)
+    !> Complex values as the compound {r, i}, or {members(1), members(2)}, e.g.
+    !> {real, imaginary} as IMAS-Core writes them. With `named_type` the dataset uses
+    !> the committed complex datatype at that path (see `commit_complex`).
+    subroutine writer_write_complex(this, path, values, status, dims, named_type, members)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         complex(real64), intent(in), target, contiguous :: values(:)
         type(fortio_status_t), intent(inout) :: status
         integer(int64), intent(in), optional :: dims(:)
         character(len=*), intent(in), optional :: named_type
+        character(len=*), intent(in), optional :: members(2)
         integer :: shared
         integer(int8), pointer :: view(:)
         integer(int8), target :: none(0)
@@ -629,8 +638,13 @@ contains
         end if
         view => none
         if (size(values) > 0) call c_f_pointer(c_loc(values), view, [16 * size(values, kind=int64)])
-        call this%add_dataset(path, dt_complex(), 16_int64, dims_or(dims, size(values)), view, &
-            status, shared)
+        if (present(members)) then
+            call this%add_dataset(path, dt_complex(trim(members(1)), trim(members(2))), 16_int64, &
+                dims_or(dims, size(values)), view, status, shared)
+        else
+            call this%add_dataset(path, dt_complex(), 16_int64, dims_or(dims, size(values)), view, &
+                status, shared)
+        end if
     end subroutine writer_write_complex
 
     !> Variable-length UTF-8 strings (the NetCDF-4 string type).
