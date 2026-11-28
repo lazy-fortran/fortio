@@ -13,6 +13,7 @@ module fortio_h5write
     use fortio_string, only: string_t, string, assignment(=), operator(//), operator(==), len
     use fortio_bytes, only: byte_writer_t
     use fortio_checksum, only: lookup3_checksum
+    use fortio_compression, only: compress_zlib
     implicit none
     private
 
@@ -43,6 +44,9 @@ module fortio_h5write
         integer(int64), allocatable :: dims(:)
         integer(int64) :: element_size = 0
         integer(int64) :: data_address = UNDEFINED
+        !> Deflate level of a single-chunk dataset, 0 for contiguous storage.
+        integer :: deflate = 0
+        integer(int64) :: stored_size = 0
         type(string_t), allocatable :: vstrings(:)
         integer(int64), allocatable :: heap_ids(:, :)
         type(wattr_t), allocatable :: attrs(:)
@@ -59,6 +63,7 @@ module fortio_h5write
         type(wobj_t), allocatable :: objs(:)
         integer :: nobjs = 0
         integer :: next_dimid = 0
+        integer :: deflate = 0
     contains
         procedure :: create => writer_create
         procedure :: close => writer_close
@@ -78,6 +83,8 @@ module fortio_h5write
         procedure :: commit_complex => writer_commit_complex
         procedure :: dimension => writer_dimension
         procedure :: attach_scales => writer_attach_scales
+        procedure :: placeholder => writer_placeholder
+        procedure :: set_deflate => writer_set_deflate
         procedure, private :: object
         procedure, private :: add_object
         procedure, private :: add_dataset
@@ -204,6 +211,19 @@ contains
 
         b = [int(kind, int8), le_bytes(int(size(body), int64), 2), int(flags, int8), body]
     end function message
+
+    !> Number of bits of a positive value: floor(log2(x)) + 1, as HDF5 counts them.
+    pure integer function bit_length(x)
+        integer(int64), intent(in) :: x
+        integer(int64) :: y
+
+        bit_length = 0
+        y = x
+        do while (y > 0)
+            y = shiftr(y, 1)
+            bit_length = bit_length + 1
+        end do
+    end function bit_length
 
     ! ------------------------------------------------------------------ object table
 
@@ -335,6 +355,7 @@ contains
         integer(int8), intent(in), contiguous :: raw(:)
         type(fortio_status_t), intent(inout) :: status
         integer, intent(in), optional :: shared_type
+        integer(int8), allocatable :: packed(:)
         integer :: idx
 
         if (product(dims) * element_size /= size(raw, kind=int64)) then
@@ -347,12 +368,21 @@ contains
         this%objs(idx)%dims = dims
         this%objs(idx)%element_size = element_size
         if (present(shared_type)) this%objs(idx)%shared_type = shared_type
-        if (size(raw) > 0) then
-            this%objs(idx)%data_address = this%eof
-            call this%out%seek(this%eof + 1)
+        if (size(raw) == 0) return
+        this%objs(idx)%data_address = this%eof
+        call this%out%seek(this%eof + 1)
+        if (this%deflate > 0 .and. size(dims) > 0) then
+            ! one chunk spanning the dataset, compressed with deflate
+            call compress_zlib(raw, packed, status, level=this%deflate)
+            if (.not. status%ok()) return
+            this%objs(idx)%deflate = this%deflate
+            this%objs(idx)%stored_size = size(packed, kind=int64)
+            call this%out%write_bytes(packed, status)
+        else
+            this%objs(idx)%stored_size = size(raw, kind=int64)
             call this%out%write_bytes(raw, status)
-            this%eof = this%eof + size(raw, kind=int64)
         end if
+        this%eof = this%eof + this%objs(idx)%stored_size
     end subroutine add_dataset
 
     function dims_or(dims, n) result(d)
@@ -445,6 +475,28 @@ contains
         this%objs(idx)%dims = d
         this%objs(idx)%vstrings = values
     end subroutine writer_write_strings
+
+    !> Deflate level (1 to 9) for the datasets written from now on; 0 stores them contiguous.
+    subroutine writer_set_deflate(this, level)
+        class(h5_writer_t), intent(inout) :: this
+        integer, intent(in) :: level
+
+        this%deflate = max(0, min(9, level))
+    end subroutine writer_set_deflate
+
+    !> Scalar one-character dataset without data, the NetCDF-4 `char` variable that
+    !> carries only attributes.
+    subroutine writer_placeholder(this, path, status)
+        class(h5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path
+        type(fortio_status_t), intent(inout) :: status
+        integer(int8) :: none(0)
+
+        call this%add_dataset(path, dt_fixed_string(1_int64, .false.), 1_int64, [0_int64], none, &
+            status)
+        if (.not. status%ok()) return
+        this%objs(this%nobjs)%dims = [integer(int64) ::]
+    end subroutine writer_placeholder
 
     !> Committed compound complex datatype, as written by NetCDF-4 for complex numbers.
     subroutine writer_commit_complex(this, path, status)
@@ -884,7 +936,7 @@ contains
         type(h5_writer_t), intent(in) :: this
         integer, intent(in) :: i
         integer(int8), allocatable :: b(:), body(:), msgs(:)
-        integer :: k, c
+        integer :: k, c, width
         integer(int64) :: nbytes
 
         allocate (msgs(0))
@@ -912,8 +964,24 @@ contains
                 end if
                 msgs = [msgs, message(5, 1, [3_int8, 10_int8])]
                 nbytes = product(o%dims) * o%element_size
-                msgs = [msgs, message(8, 0, [3_int8, 1_int8, le_bytes(o%data_address, 8), &
-                    le_bytes(nbytes, 8)])]
+                if (o%deflate > 0) then
+                    msgs = [msgs, message(11, 0, [2_int8, 1_int8, le_bytes(1_int64, 2), &
+                        le_bytes(0_int64, 2), le_bytes(1_int64, 2), &
+                        le_bytes(int(o%deflate, int64), 4)])]
+                    ! HDF5 requires the shortest encoding of the largest chunk dimension
+                    width = (bit_length(max(maxval(o%dims), o%element_size)) + 7) / 8
+                    if (width == 0) width = 1
+                    body = [4_int8, 2_int8, 2_int8, int(size(o%dims) + 1, int8), int(width, int8)]
+                    do k = 1, size(o%dims)
+                        body = [body, le_bytes(o%dims(k), width)]
+                    end do
+                    body = [body, le_bytes(o%element_size, width), 1_int8, le_bytes(o%stored_size, 8), &
+                        le_bytes(0_int64, 4), le_bytes(o%data_address, 8)]
+                    msgs = [msgs, message(8, 0, body)]
+                else
+                    msgs = [msgs, message(8, 0, [3_int8, 1_int8, le_bytes(o%data_address, 8), &
+                        le_bytes(nbytes, 8)])]
+                end if
             case (NAMED_TYPE)
                 msgs = [msgs, message(3, 1, o%dtype)]
                 ! the link and every dataset that uses the type hold a reference

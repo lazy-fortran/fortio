@@ -35,6 +35,11 @@ with h5py.File(path, "r") as f:
     check(g["empty"].shape == (0,), "empty dataset")
     check(list(g.attrs["names"]) in (["a", "bcd"], [b"a", b"bcd"]), "vlen string attribute")
     check(list(g.attrs["counts"]) == [1, -2], "int64 attribute")
+    c = g["compressed"]
+    check(c.compression == "gzip" and c.shape == (50, 100), "deflate dataset")
+    check(np.array_equal(c[()].ravel(), np.arange(1, 5001) % 7), "deflate values")
+    p = g["profiles_1d"]
+    check(p.shape == () and p.dtype.kind == "S" and p.dtype.itemsize == 1, "placeholder")
 
 with netCDF4.Dataset(path, "r") as ds:
     check(ds.Conventions == "IMAS", "netCDF global attribute")
@@ -46,6 +51,8 @@ with netCDF4.Dataset(path, "r") as ds:
     check(np.allclose(v[:], np.arange(1, 19).reshape(3, 6) / 7), "netCDF values")
     check(list(g["profiles_1d.ion.label"][:]) == ["H", "He", ""], "netCDF strings")
     check(g["ids_properties.comment"][...] == "é text with UTF-8", "netCDF scalar string")
+    check(g["profiles_1d"].documentation == "Core plasma profiles", "netCDF char variable")
+    check(np.array_equal(g["compressed"][:].ravel(), np.arange(1, 5001) % 7), "netCDF deflate")
     c = g["named_complex"][:]
     check(complex(c[0]["r"], c[0]["i"]) == 3 + 1.5j, "netCDF compound")
 subprocess.run(["ncdump", "-h", path], check=True, capture_output=True)
