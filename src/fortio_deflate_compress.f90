@@ -6,7 +6,7 @@ module fortio_deflate_compress
     implicit none
     private
 
-    public :: bit_reverse, deflate_compress, init_fixed_huffman_tables
+    public :: deflate_compress
     public :: zlib_compress_into
 
     interface
@@ -77,54 +77,6 @@ contains
         allocate (output_data(output_len))
         output_data = buffer(1:output_len)
     end subroutine encode
-
-    subroutine init_fixed_huffman_tables(literal_codes, literal_lengths, distance_codes, &
-            distance_lengths)
-        integer, intent(out) :: literal_codes(0:285)
-        integer, intent(out) :: literal_lengths(0:285)
-        integer, intent(out) :: distance_codes(0:29)
-        integer, intent(out) :: distance_lengths(0:29)
-        integer :: code, i
-
-        code = 0
-        do i = 0, 143
-            literal_codes(i) = code + 48
-            literal_lengths(i) = 8
-            code = code + 1
-        end do
-        code = 0
-        do i = 144, 255
-            literal_codes(i) = code + 400
-            literal_lengths(i) = 9
-            code = code + 1
-        end do
-        code = 0
-        do i = 256, 279
-            literal_codes(i) = code
-            literal_lengths(i) = 7
-            code = code + 1
-        end do
-        code = 0
-        do i = 280, 285
-            literal_codes(i) = code + 192
-            literal_lengths(i) = 8
-            code = code + 1
-        end do
-        do i = 0, 29
-            distance_codes(i) = i
-            distance_lengths(i) = 5
-        end do
-    end subroutine init_fixed_huffman_tables
-
-    pure integer function bit_reverse(value, num_bits) result(reversed_value)
-        integer, intent(in) :: value, num_bits
-        integer :: i
-
-        reversed_value = 0
-        do i = 0, num_bits - 1
-            if (btest(value, i)) reversed_value = ibset(reversed_value, num_bits - 1 - i)
-        end do
-    end function bit_reverse
 
     subroutine zlib_compress_into(input_data, input_len, output_data, output_len, level)
         integer(int8), intent(in) :: input_data(*)

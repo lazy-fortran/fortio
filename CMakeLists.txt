@@ -37,9 +37,9 @@ add_library(fortio
     src/fortio_checksum.f90
     src/fortio_deflate.c
     src/fortio_deflate_encode.c
+    src/fortio_deflate_decode.c
     src/fortio_deflate_checksums.f90
     src/fortio_deflate_compress.f90
-    src/fortio_deflate_decompress.f90
     src/fortio_compression.f90
     src/fortio_deflate.f90
     src/fortio_bytes.f90
