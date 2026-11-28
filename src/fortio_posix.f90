@@ -7,7 +7,7 @@ module fortio_posix
     public :: posix_sync
     public :: posix_truncate
     public :: posix_path_exists, posix_pread, posix_pwrite, posix_pwrite_swap64
-    public :: mapped_open, mapped_copy, mapped_copy_swap64, mapped_close
+    public :: mapped_open, mapped_copy, mapped_copy_swap64, mapped_close, mapped_view
     public :: handle_table_lock, handle_table_unlock
     public :: write_session_lock, write_session_unlock
 
@@ -111,6 +111,13 @@ module fortio_posix
             integer(c_int64_t), value :: offset
             integer(c_int64_t) :: bytes_copied
         end function mapped_copy_swap64
+
+        function mapped_view(mapping, length) bind(C, name="fortio_mapped_view") result(address)
+            import :: c_int64_t, c_ptr
+            type(c_ptr), value :: mapping
+            integer(c_int64_t), intent(out) :: length
+            type(c_ptr) :: address
+        end function mapped_view
 
         function mapped_close(mapping) bind(C, name="fortio_mapped_close") result(code)
             import :: c_int, c_ptr

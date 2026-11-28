@@ -16,6 +16,7 @@ call sites. The generated API reference documents individual procedures.
 | `hdf5_tools` | Typed helper interface used by the plasma-code consumers |
 | `h5lt` | Supported HDF5-Lite dataset inquiry |
 | `fortio_netcdf_classic`, `fortio_netcdf_writer` | Classic NetCDF storage |
+| `fortio_h5read` | General HDF5 and NetCDF-4 read access: every layout, chunk index, datatype class, link and attribute storage |
 | `fortio_hdf5_reader`, `fortio_hdf5_writer` | Shared HDF5 and NetCDF-4 storage |
 | `fortio_deflate`, `fortio_compression` | Compression and decompression |
 | `fortio_zip` | ZIP32 archive output |

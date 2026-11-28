@@ -460,6 +460,18 @@ int64_t fortio_mapped_copy_swap64(
     return (int64_t)count;
 }
 
+const void *fortio_mapped_view(const void *opaque_mapping, int64_t *length)
+{
+    const struct fortio_mapping *mapping = opaque_mapping;
+
+    if (mapping == NULL) {
+        *length = 0;
+        return NULL;
+    }
+    *length = (int64_t)mapping->length;
+    return mapping->address;
+}
+
 int fortio_mapped_close(void *opaque_mapping)
 {
     struct fortio_mapping *mapping = opaque_mapping;

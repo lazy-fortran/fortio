@@ -19,8 +19,20 @@ an error; they must not silently degrade the file.
 | HDF5 superblock 0 input | yes | no | Legacy object headers and symbol-table groups |
 | Legacy one-element integer scalars | yes | no | Rank-1 length-one datasets read as scalars |
 | HDF5 single-chunk datasets | yes | yes | Shuffle and Deflate supported |
-| General HDF5 chunk indexes | no | no | Multi-chunk indexes are not implemented |
+| General HDF5 chunk indexes | yes | no | Read through `fortio_h5read` |
 | CDF-5 | no | no | No downstream requirement |
+
+## General HDF5 reader
+
+`fortio_h5read` reads any HDF5 1.8 to 2.0 file without the HDF5 library:
+superblocks 0 to 3, object headers 1 and 2, committed datatypes, groups in
+symbol-table, compact and dense storage, all datatype classes, fill values,
+compact, contiguous and chunked layouts with version-1 B-trees and the single,
+implicit, fixed-array, extensible-array and version-2 B-tree chunk indexes,
+the deflate, shuffle and Fletcher-32 filters, compact and dense attributes,
+and variable-length data. Virtual datasets, external storage, huge
+fractal-heap objects, filtered fractal heaps, the shared-message heap and
+filters other than these three are reported as unsupported.
 
 ## NetCDF adapter
 
