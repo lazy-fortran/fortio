@@ -16,6 +16,13 @@ def check(condition, what):
 
 
 path = sys.argv[1]
+with h5py.File(path + ".master.h5", "r") as f:
+    check(f.userblock_size == 1024, f"user block {f.userblock_size}")
+    check(f.attrs["HDF5_BACKEND_VERSION"] in (b"1.0", "1.0"), "attribute behind the user block")
+    check(np.array_equal(f["local"][()], [1.5, 2.5]), "data behind the user block")
+    link = f.get("profiles", getlink=True)
+    check(isinstance(link, h5py.ExternalLink) and link.path == "/core_profiles/0", "external link")
+    check(f["profiles"]["profiles_1d.ion.label"].shape == (3,), "external link followed")
 with h5py.File(path, "r") as f:
     g = f["core_profiles/0"]
     check(f.attrs["Conventions"] in (b"IMAS", "IMAS"), "root text attribute")

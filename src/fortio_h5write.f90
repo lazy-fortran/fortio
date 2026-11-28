@@ -21,7 +21,7 @@ module fortio_h5write
     private
 
     integer(int64), parameter :: UNDEFINED = -1_int64
-    integer, parameter :: GROUP = 1, DATASET = 2, NAMED_TYPE = 3
+    integer, parameter :: GROUP = 1, DATASET = 2, NAMED_TYPE = 3, EXTERNAL_LINK = 4
     integer(int64), parameter :: SUPERBLOCK_SIZE = 48
     integer(int64), parameter :: GHEAP_MIN = 4096
 
@@ -60,6 +60,8 @@ module fortio_h5write
         integer :: nattrs = 0
         integer(int64) :: address = 0
         integer(int64) :: header_size = 0
+        !> File and object path of an external link.
+        type(string_t) :: link_file, link_object
     end type wobj_t
 
     type, public :: h5_writer_t
@@ -70,12 +72,16 @@ module fortio_h5write
         type(wobj_t), allocatable :: objs(:)
         integer :: nobjs = 0
         integer :: next_dimid = 0
+        !> Size of the user block before the superblock; file addresses are relative
+        !> to the superblock.
+        integer(int64) :: origin = 0
         integer :: deflate = 0
         logical :: shuffle = .false.
     contains
         procedure :: create => writer_create
         procedure :: close => writer_close
         procedure :: create_group => writer_create_group
+        procedure :: external_link => writer_external_link
         procedure, private :: write_real64 => writer_write_real64
         procedure, private :: write_int32 => writer_write_int32
         procedure, private :: write_int64 => writer_write_int64
@@ -316,11 +322,25 @@ contains
 
     ! ------------------------------------------------------------------ public API
 
-    subroutine writer_create(this, path, status)
+    !> Create the file `path`. A `userblock` of 512 bytes or a larger power of two
+    !> is left free before the superblock, as IMAS-Core writes 1024 bytes.
+    subroutine writer_create(this, path, status, userblock)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         type(fortio_status_t), intent(inout) :: status
+        integer(int64), intent(in), optional :: userblock
+        integer(int64) :: blocks
 
+        this%origin = 0
+        if (present(userblock)) then
+            blocks = userblock / 512
+            if (userblock /= 0 .and. (userblock < 512 .or. mod(userblock, 512_int64) /= 0 .or. &
+                iand(blocks, blocks - 1) /= 0)) then
+                call status%set(FORTIO_ENOTSUP, "user block must be 0, 512 or a larger power of two")
+                return
+            end if
+            this%origin = userblock
+        end if
         call this%out%open(path, status)
         if (.not. status%ok()) return
         this%opened = .true.
@@ -334,6 +354,19 @@ contains
         allocate (this%objs(1)%children(0), this%objs(1)%attrs(4))
         this%next_dimid = 0
     end subroutine writer_create
+
+    !> Link `path` to the object `object` in the HDF5 file `file`.
+    subroutine writer_external_link(this, path, file, object, status)
+        class(h5_writer_t), intent(inout) :: this
+        character(len=*), intent(in) :: path, file, object
+        type(fortio_status_t), intent(inout) :: status
+        integer :: idx
+
+        idx = this%add_object(path, EXTERNAL_LINK, status)
+        if (idx == 0) return
+        this%objs(idx)%link_file = file
+        this%objs(idx)%link_object = object
+    end subroutine writer_external_link
 
     subroutine writer_create_group(this, path, status)
         class(h5_writer_t), intent(inout) :: this
@@ -379,7 +412,7 @@ contains
         if (present(shared_type)) this%objs(idx)%shared_type = shared_type
         if (size(raw) == 0) return
         this%objs(idx)%data_address = this%eof
-        call this%out%seek(this%eof + 1)
+        call this%out%seek(this%origin + this%eof + 1)
         if (this%deflate > 0 .and. size(dims) > 0) then
             call write_chunks(this, this%objs(idx), raw, status)
         else
@@ -922,6 +955,7 @@ contains
         end do
         ! header sizes do not depend on the addresses they contain
         do i = 1, this%nobjs
+            if (this%objs(i)%kind == EXTERNAL_LINK) cycle
             block = encode_object(this, i)
             this%objs(i)%header_size = size(block, kind=int64)
             this%objs(i)%address = pos
@@ -929,26 +963,28 @@ contains
         end do
         ! payloads
         gheap = build_heap(this)
-        call this%out%seek(heap_start + 1)
+        call this%out%seek(this%origin + heap_start + 1)
         if (size(gheap) > 0) call this%out%write_bytes(gheap, status)
         do i = 1, this%nobjs
             if (allocated(this%objs(i)%vstrings) .and. this%objs(i)%kind == DATASET) then
                 vdata = vlen_elements(this%objs(i)%vstrings, this%objs(i)%heap_ids)
-                call this%out%seek(this%objs(i)%data_address + 1)
+                call this%out%seek(this%origin + this%objs(i)%data_address + 1)
                 if (size(vdata) > 0) call this%out%write_bytes(vdata, status)
             end if
         end do
         do i = 1, this%nobjs
+            if (this%objs(i)%kind == EXTERNAL_LINK) cycle
             block = encode_object(this, i)
-            call this%out%seek(this%objs(i)%address + 1)
+            call this%out%seek(this%origin + this%objs(i)%address + 1)
             call this%out%write_bytes(block, status)
             if (.not. status%ok()) return
         end do
+        ! libhdf5 stores the end-of-file address including the user block
         sb = [-119_int8, text_bytes("HDF" // achar(13) // achar(10) // achar(26) // achar(10)), &
-              2_int8, 8_int8, 8_int8, 0_int8, le_bytes(0_int64, 8), le_bytes(UNDEFINED, 8), &
-              le_bytes(pos, 8), le_bytes(this%objs(1)%address, 8)]
+              2_int8, 8_int8, 8_int8, 0_int8, le_bytes(this%origin, 8), le_bytes(UNDEFINED, 8), &
+              le_bytes(this%origin + pos, 8), le_bytes(this%objs(1)%address, 8)]
         sb = [sb, le_bytes(int(lookup3_checksum(sb), int64), 4)]
-        call this%out%seek(1_int64)
+        call this%out%seek(this%origin + 1)
         call this%out%write_bytes(sb, status)
         if (.not. status%ok()) return
         call this%out%close(status)
@@ -1116,10 +1152,21 @@ contains
                 msgs = [msgs, message(10, 0, [0_int8, 0_int8])]
                 do k = 1, size(o%children)
                     c = o%children(k)
-                    ! flags 17: two-byte name length, character set present (UTF-8)
-                    body = [1_int8, 17_int8, 1_int8, &
-                        le_bytes(int(len(this%objs(c)%name), int64), 2), &
-                        text_bytes(this%objs(c)%name%str()), le_bytes(this%objs(c)%address, 8)]
+                    if (this%objs(c)%kind == EXTERNAL_LINK) then
+                        ! flags 25: two-byte name length, link type (64, external) and
+                        ! character set present; the link value is "file\0object\0"
+                        body = [0_int8, text_bytes(this%objs(c)%link_file%str()), 0_int8, &
+                            text_bytes(this%objs(c)%link_object%str()), 0_int8]
+                        body = [1_int8, 25_int8, 64_int8, 1_int8, &
+                            le_bytes(int(len(this%objs(c)%name), int64), 2), &
+                            text_bytes(this%objs(c)%name%str()), &
+                            le_bytes(size(body, kind=int64), 2), body]
+                    else
+                        ! flags 17: two-byte name length, character set present (UTF-8)
+                        body = [1_int8, 17_int8, 1_int8, &
+                            le_bytes(int(len(this%objs(c)%name), int64), 2), &
+                            text_bytes(this%objs(c)%name%str()), le_bytes(this%objs(c)%address, 8)]
+                    end if
                     msgs = [msgs, message(6, 0, body)]
                 end do
             case (DATASET)
