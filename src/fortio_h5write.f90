@@ -848,10 +848,7 @@ contains
             integer(int64), intent(in) :: nbytes
             integer(int64), intent(out) :: id(2)
 
-            if (nbytes == 0) then
-                id = [0_int64, 0_int64]
-                return
-            end if
+            ! the HDF5 library stores "" as an empty heap object, a null id reads as NIL
             need = 16 + 8 * ((nbytes + 7) / 8)
             if (nidx == 65535 .or. (nidx > 0 .and. used + need > 1048576)) then
                 coll = coll + max(used, GHEAP_MIN)

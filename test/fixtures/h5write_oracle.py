@@ -56,6 +56,8 @@ with netCDF4.Dataset(path, "r") as ds:
     c = g["named_complex"][:]
     check(complex(c[0]["r"], c[0]["i"]) == 3 + 1.5j, "netCDF compound")
 subprocess.run(["ncdump", "-h", path], check=True, capture_output=True)
+dump = subprocess.run(["ncdump", path], check=True, capture_output=True, text=True).stdout
+check("NIL" not in dump, "empty strings are stored as empty heap objects, not null")
 
 # the HDF5 library must be able to extend the file
 with h5py.File(path, "a") as f:
