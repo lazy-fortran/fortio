@@ -32,6 +32,7 @@ add_library(fortio
     src/fortio_posix_io.c
     src/fortio_posix.f90
     src/fortio_status.f90
+    src/fortio_string.f90
     src/fortio_checksum.f90
     src/fortio_deflate.c
     src/fortio_deflate_checksums.f90
@@ -138,6 +139,10 @@ if(FORTIO_BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-test.zip"
         "${CMAKE_CURRENT_BINARY_DIR}/fortio-source.bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/verify_zip.py")
+
+    add_executable(test_string test/test_string.f90)
+    target_link_libraries(test_string PRIVATE fortio)
+    add_test(NAME string COMMAND test_string)
 
     add_executable(test_bytes test/test_bytes.f90)
     target_link_libraries(test_bytes PRIVATE fortio)
