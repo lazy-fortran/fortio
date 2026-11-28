@@ -90,10 +90,28 @@ program test_h5write
     call check()
     call h5%close(st)
     call check()
+    ! a second file behind a 1024-byte user block, linking into the first
+    call h5%create(path%str() // ".master.h5", st, userblock=1024_int64)
+    call check()
+    call h5%attribute("/", "HDF5_BACKEND_VERSION", "1.0", st)
+    call check()
+    call h5%external_link("/profiles", "./" // basename(path%str()), "/core_profiles/0", st)
+    call check()
+    call h5%write("/local", [1.5_real64, 2.5_real64], st)
+    call check()
+    call h5%close(st)
+    call check()
     call execute_command_line("python3 " // script%str() // " " // path%str(), exitstat=exit_code)
     if (exit_code /= 0) error stop "h5py or netCDF4 disagree with the written file"
 
 contains
+
+    function basename(p) result(b)
+        character(len=*), intent(in) :: p
+        character(len=:), allocatable :: b
+
+        b = p(index(p, "/", back=.true.) + 1:)
+    end function basename
 
     subroutine check()
         if (.not. st%ok()) error stop st%message
