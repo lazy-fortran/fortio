@@ -6,24 +6,28 @@ program test_xml
 
     type(string_t) :: doc_path, dump_path, script
 
-    doc_path = argument(1)
-    dump_path = argument(2)
-    script = argument(3)
+    doc_path = argument(1, "build/fortio-xml.xml")
+    dump_path = argument(2, "build/fortio-xml.events")
+    script = argument(3, "test/fixtures/xml_oracle.py")
     call check_small_document()
     call check_errors()
     call check_against_expat()
 
 contains
 
-    function argument(i) result(value)
+    function argument(i, default) result(value)
         integer, intent(in) :: i
+        character(len=*), intent(in) :: default
         type(string_t) :: value
         character(len=4096) :: buffer
         integer :: n
 
         call get_command_argument(i, buffer, n)
-        if (n == 0) error stop "usage: test_xml DOC DUMP ORACLE"
-        value = buffer(1:n)
+        if (n == 0) then
+            value = default
+        else
+            value = buffer(1:n)
+        end if
     end function argument
 
     subroutine expect(condition, what)
