@@ -36,6 +36,7 @@ program test_deflate
         error stop "shuffled roundtrip differs"
 
     call check_stored_block()
+    call check_empty_stream()
 
     call get_command_argument(1, compressed_path)
     call get_command_argument(2, raw_path)
@@ -58,6 +59,16 @@ program test_deflate
     if (command_status /= 0) error stop "Python rejected native zlib stream"
 
 contains
+
+    !> zlib.compress(b"", 1): the decoded stream must be empty.
+    subroutine check_empty_stream()
+        integer(int8), allocatable :: decoded(:)
+        type(fortio_status_t) :: st
+
+        call decompress_zlib(int([120, 1, 3, 0, 0, 0, 0, 1], int8), decoded, st)
+        if (.not. st%ok()) error stop trim(st%message)
+        if (size(decoded) /= 0) error stop "empty zlib stream decodes to bytes"
+    end subroutine check_empty_stream
 
     subroutine read_file(path, bytes)
         character(len=*), intent(in) :: path

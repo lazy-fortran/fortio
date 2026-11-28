@@ -4,7 +4,7 @@ module fortio_compression
     use fortio_deflate_checksums, only: calculate_crc32 => crc32_calculate
     use fortio_deflate_compress, only: compress_raw => deflate_compress, &
         zlib_compress_into
-    use fortio_deflate_decompress, only: zlib_decompress_impl => zlib_decompress
+    use fortio_deflate_decompress, only: zlib_inflate
     use fortio_status, only: fortio_status_t, FORTIO_EIO
     implicit none
     private
@@ -31,16 +31,18 @@ contains
         call zlib_compress_into(input, size(input), output, output_size)
     end subroutine compress_zlib
 
-    subroutine decompress_zlib(input, output, status)
-        !! Decode and checksum a zlib-framed Deflate stream.
+    subroutine decompress_zlib(input, output, status, expected_size)
+        !! Decode and checksum a zlib-framed Deflate stream. A known decompressed size
+        !! in `expected_size` lets the output be allocated once at its final size.
         integer(int8), intent(in) :: input(:)
         integer(int8), allocatable, intent(out) :: output(:)
         type(fortio_status_t), intent(inout) :: status
+        integer, intent(in), optional :: expected_size
         integer :: code
         character(len=96) :: message
 
         call status%clear()
-        output = zlib_decompress_impl(input, size(input), code, .true.)
+        call zlib_inflate(input, size(input), output, code, .true., expected_size)
         if (code /= 0) then
             write (message, '("zlib decompression failed with code ",i0)') code
             call status%set(FORTIO_EIO, trim(message))

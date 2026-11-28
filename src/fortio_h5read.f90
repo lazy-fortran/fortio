@@ -10,7 +10,7 @@
 !> Data are returned in the file's element order (last dimension fastest).
 module fortio_h5read
     use, intrinsic :: iso_c_binding, only: c_ptr, c_int, c_int64_t, c_associated, c_null_ptr, &
-        c_f_pointer, c_null_char
+        c_f_pointer, c_null_char, c_loc
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
     use fortio_status, only: fortio_status_t, FORTIO_EFORMAT, FORTIO_EIO, FORTIO_ENOTFOUND, &
         FORTIO_ENOTSUP, FORTIO_ETYPE, FORTIO_ESTATE
@@ -1361,10 +1361,12 @@ contains
     end subroutine gather_chunks
 
     !> Element bytes of a dataset in file order, missing storage filled.
-    function read_dataset(this, d) result(out)
+    !> Raw bytes of dataset `d` in file element order. A dataset stored as one chunk
+    !> that covers it is decoded in place, without a second copy of the data.
+    subroutine read_dataset(this, d, out)
         class(h5_reader_t), intent(inout) :: this
         type(dataset_t), intent(in) :: d
-        integer(int8), allocatable :: out(:)
+        integer(int8), allocatable, intent(out) :: out(:)
         integer(int64) :: nelem, nbytes, i, esize
         type(chunk_ref_t), allocatable :: chunks(:)
         integer :: nchunks, k
@@ -1376,6 +1378,20 @@ contains
             if (d%dims(1) < 0) nelem = 0
         end if
         nbytes = nelem * esize
+        if (nbytes > 0 .and. d%layout_class == 2) then
+            call this%gather_chunks(d, chunks, nchunks)
+            if (this%bad) return
+            if (nchunks == 1 .and. size(d%chunk) == size(d%dims)) then
+                if (all(d%chunk == d%dims) .and. all(chunks(1)%offset == 0)) then
+                    call chunk_bytes(chunks(1), raw)
+                    if (this%bad) return
+                    if (size(raw, kind=int64) == nbytes) then
+                        call move_alloc(raw, out)
+                        return
+                    end if
+                end if
+            end if
+        end if
         allocate (out(nbytes))
         out = 0_int8
         if (size(d%fill) == esize .and. esize > 0) then
@@ -1389,45 +1405,85 @@ contains
             out(1:min(nbytes, d%storage_size)) = this%bytes(d%compact_address, &
                 min(nbytes, d%storage_size))
         case (1)
-            if (d%address /= UNDEFINED) out = this%bytes(this%base + d%address, nbytes)
+            if (d%address /= UNDEFINED) then
+                if (inside(this%base + d%address, nbytes)) &
+                    out = this%m(this%base + d%address:this%base + d%address + nbytes - 1)
+            end if
         case (2)
-            call this%gather_chunks(d, chunks, nchunks)
             do k = 1, nchunks
-                raw = this%bytes(this%base + chunks(k)%address, chunks(k)%size)
-                if (this%bad) return
-                call unfilter(raw, chunks(k)%mask)
-                if (this%bad) return
-                call place(raw, chunks(k)%offset)
+                if (any_filter(chunks(k)%mask)) then
+                    call chunk_bytes(chunks(k), raw)
+                    if (this%bad) return
+                    call place(raw, chunks(k)%offset)
+                else if (inside(this%base + chunks(k)%address, chunks(k)%size)) then
+                    call place(this%m(this%base + chunks(k)%address: &
+                        this%base + chunks(k)%address + chunks(k)%size - 1), chunks(k)%offset)
+                end if
             end do
         end select
 
     contains
 
-        subroutine unfilter(b, mask)
-            integer(int8), allocatable, intent(inout) :: b(:)
+        logical function inside(a, n)
+            integer(int64), intent(in) :: a, n
+
+            inside = a >= 0 .and. n >= 0 .and. a + n <= this%length
+            if (.not. inside) call this%fail("HDF5 data points outside the file")
+        end function inside
+
+        !> Whether any filter of the pipeline applies to a chunk with filter mask `mask`.
+        logical function any_filter(mask)
             integer, intent(in) :: mask
-            integer(int8), allocatable :: tmp(:)
-            type(fortio_status_t) :: st
             integer :: f
 
+            any_filter = .false.
+            do f = 1, size(d%filters)
+                if (.not. btest(mask, f - 1)) any_filter = .true.
+            end do
+        end function any_filter
+
+        !> Unfiltered bytes of a chunk. The first filter reads the mapped file directly.
+        subroutine chunk_bytes(c, b)
+            type(chunk_ref_t), intent(in) :: c
+            integer(int8), allocatable, intent(out) :: b(:)
+            integer(int8), allocatable :: tmp(:)
+            type(fortio_status_t) :: st
+            integer(int64) :: a
+            integer :: f
+            logical :: first
+
+            allocate (b(0))
+            a = this%base + c%address
+            if (.not. inside(a, c%size)) return
+            first = .true.
             do f = size(d%filters), 1, -1
-                if (btest(mask, f - 1)) cycle
+                if (btest(c%mask, f - 1)) cycle
                 select case (d%filters(f))
                 case (1)
-                    call decompress_zlib(b, tmp, st)
+                    if (first) then
+                        call decompress_zlib(this%m(a:a + c%size - 1), tmp, st, &
+                            expected_size=int(min(product(d%chunk) * esize, int(huge(1), int64))))
+                    else
+                        call decompress_zlib(b, tmp, st, &
+                            expected_size=int(min(product(d%chunk) * esize, int(huge(1), int64))))
+                    end if
                     if (.not. st%ok()) then
                         call this%fail("deflate: " // st%message)
                         return
                     end if
                     call move_alloc(tmp, b)
                 case (2)
+                    if (first) b = this%m(a:a + c%size - 1)
                     call unshuffle_bytes(b, int(esize), tmp)
                     call move_alloc(tmp, b)
                 case (3)
+                    if (first) b = this%m(a:a + c%size - 1)
                     b = b(1:size(b) - 4)
                 end select
+                first = .false.
             end do
-        end subroutine unfilter
+            if (first) b = this%m(a:a + c%size - 1)
+        end subroutine chunk_bytes
 
         !> Copy a chunk into `out`, clipped at the dataset edges.
         subroutine place(b, offset)
@@ -1468,7 +1524,7 @@ contains
             end do
         end subroutine place
 
-    end function read_dataset
+    end subroutine read_dataset
 
     ! ------------------------------------------------------------------ heaps and B-trees
 
@@ -1866,7 +1922,7 @@ contains
 
         allocate (raw(0), dims(0))
         if (.not. locate(this, path, d, status)) return
-        raw = read_dataset(this, d)
+        call read_dataset(this, d, raw)
         t = d%type
         dims = d%dims
         if (this%finish(status)) continue
@@ -2152,8 +2208,15 @@ contains
         end if
     end function native
 
+    !> Whether the byte order `little_endian` is the native one.
+    pure logical function native_order(little_endian)
+        logical, intent(in) :: little_endian
+
+        native_order = little_endian .eqv. (transfer(1_int32, 1_int8) == 1_int8)
+    end function native_order
+
     subroutine decode_real64(raw, t, values, status)
-        integer(int8), intent(in) :: raw(:)
+        integer(int8), intent(in), target, contiguous :: raw(:)
         type(h5_type_t), intent(in) :: t
         real(real64), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
@@ -2171,6 +2234,15 @@ contains
         allocate (values(n))
         select case (t%class)
         case (H5_FLOAT)
+            if (s == 8 .and. native_order(t%little_endian) .and. n > 0) then
+                block
+                    real(real64), pointer :: native_values(:)
+
+                    call c_f_pointer(c_loc(raw), native_values, [n])
+                    values(:) = native_values
+                end block
+                return
+            end if
             do i = 0, n - 1
                 select case (s)
                 case (8)
@@ -2192,7 +2264,7 @@ contains
     end subroutine decode_real64
 
     recursive subroutine decode_int64(raw, t, values, status)
-        integer(int8), intent(in) :: raw(:)
+        integer(int8), intent(in), target, contiguous :: raw(:)
         type(h5_type_t), intent(in) :: t
         integer(int64), allocatable, intent(out) :: values(:)
         type(fortio_status_t), intent(inout) :: status
@@ -2216,6 +2288,21 @@ contains
         little = t%little_endian
         n = size(raw) / s
         allocate (values(n))
+        if (signed .and. native_order(little) .and. n > 0 .and. (s == 8 .or. s == 4)) then
+            block
+                integer(int64), pointer :: v8(:)
+                integer(int32), pointer :: v4(:)
+
+                if (s == 8) then
+                    call c_f_pointer(c_loc(raw), v8, [n])
+                    values(:) = v8
+                else
+                    call c_f_pointer(c_loc(raw), v4, [n])
+                    values(:) = int(v4, int64)
+                end if
+            end block
+            return
+        end if
         do i = 0, n - 1
             if (little) then
                 b(1:s) = raw(i * s + 1:i * s + s)

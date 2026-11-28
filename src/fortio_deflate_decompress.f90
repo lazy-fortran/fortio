@@ -7,7 +7,7 @@ module fortio_deflate_decompress
     implicit none
 
     private
-    public :: zlib_decompress
+    public :: zlib_decompress, zlib_inflate
 
     private :: build_fixed_decode_table
     private :: zlib_init_decompress_state
@@ -37,7 +37,7 @@ module fortio_deflate_decompress
     integer :: out_size = 0
     integer :: input_len = 0
     integer(int8), allocatable :: output_data(:)
-    integer(int8), allocatable :: input_data(:)
+    integer(int8), pointer, contiguous :: input_data(:) => null()
     integer :: literal_table(0:2**9 - 1)
     integer :: literal_table_len(0:2**9 - 1)
     integer :: distance_table(0:2**5 - 1)
@@ -74,11 +74,24 @@ contains
 
     function zlib_decompress(input_data, input_len, status, verify_checksum) result(output_data)
         !! Decompress a zlib-wrapped RFC 1951 stream.
-        integer(int8), intent(in) :: input_data(*)
+        integer(int8), intent(in), target :: input_data(*)
         integer, intent(in) :: input_len
         integer, intent(out), optional :: status
         logical, intent(in), optional :: verify_checksum
         integer(int8), allocatable :: output_data(:)
+
+        call zlib_inflate(input_data, input_len, output_data, status, verify_checksum)
+    end function zlib_decompress
+
+    subroutine zlib_inflate(input_data, input_len, output_data, status, verify_checksum, expected_size)
+        !! Decompress a zlib-wrapped RFC 1951 stream into `output_data`. With the
+        !! decompressed size known in `expected_size`, the output is allocated once.
+        integer(int8), intent(in), target :: input_data(*)
+        integer, intent(in) :: input_len
+        integer(int8), allocatable, intent(out) :: output_data(:)
+        integer, intent(out), optional :: status
+        logical, intent(in), optional :: verify_checksum
+        integer, intent(in), optional :: expected_size
 
         type(zlib_decompress_state_t) :: state
         integer :: cmf, flg
@@ -116,8 +129,11 @@ contains
 
         call zlib_init_decompress_state(state, input_data, input_len)
 
-        allocate (output_data(max(256, input_len*4)))
-        state%output_data = output_data
+        if (present(expected_size)) then
+            allocate (state%output_data(max(1, expected_size)))
+        else
+            allocate (state%output_data(max(256, 2 * input_len)))
+        end if
         state%out_size = 0
 
         call zlib_decompress_blocks(state)
@@ -139,18 +155,17 @@ contains
             end if
         end if
 
+        nullify (state%input_data)
         if (state%status == 0) then
             call zlib_trim_output(state)
-            output_data = state%output_data
-        else
-            output_data = state%output_data(1:0)
+            call move_alloc(state%output_data, output_data)
         end if
         status_local = state%status
 
         900     continue
         if (.not. allocated(output_data)) allocate (output_data(0))
         if (present(status)) status = status_local
-    end function zlib_decompress
+    end subroutine zlib_inflate
 
     subroutine build_fixed_decode_table(codes, lengths, max_bits, table, table_len)
         !! Build Huffman decode table from codes and lengths
@@ -182,7 +197,7 @@ contains
     subroutine zlib_init_decompress_state(state, input_data, input_len)
         !! Initialize decompression state and build Huffman tables
         type(zlib_decompress_state_t), intent(inout) :: state
-        integer(int8), intent(in) :: input_data(*)
+        integer(int8), intent(in), target :: input_data(*)
         integer, intent(in) :: input_len
         integer :: literal_codes(0:285), literal_lengths(0:285)
         integer :: distance_codes(0:29), distance_lengths(0:29)
@@ -191,8 +206,8 @@ contains
         state%bit_count = 0
         state%status = 0
         state%input_len = input_len
-        allocate (state%input_data(input_len))
-        state%input_data(1:input_len) = input_data(1:input_len)
+        ! the stream is only read, so the state points at it instead of copying it
+        state%input_data(1:input_len) => input_data(1:input_len)
 
         call init_fixed_huffman_tables(literal_codes, literal_lengths, distance_codes, distance_lengths)
         call build_fixed_decode_table(literal_codes, literal_lengths, LITERAL_TABLE_BITS, &
@@ -707,6 +722,8 @@ contains
         end if
         if (state%out_size <= 0) then
             state%out_size = 0
+            deallocate (state%output_data)
+            allocate (state%output_data(0))
         else if (state%out_size < size(state%output_data)) then
             allocate (shrink(state%out_size))
             shrink = state%output_data(1:state%out_size)
