@@ -58,8 +58,36 @@ program test_deflate
     call execute_command_line("python3 "//trim(script)//" verify "// &
         trim(compressed_path)//" "//trim(raw_path), exitstat=command_status)
     if (command_status /= 0) error stop "Python rejected native zlib stream"
+    call check_stream_set(trim(oracle_path)//".set", trim(script))
 
 contains
+
+    !> Python's zlib encodes 60 random inputs with every strategy and level; Fortio
+    !> decodes each and encodes it again at another level for Python to decode.
+    subroutine check_stream_set(dir, script)
+        character(len=*), intent(in) :: dir, script
+        integer(int8), allocatable :: data(:), packed(:), decoded(:)
+        type(fortio_status_t) :: st
+        character(len=16) :: k_text
+        integer :: k, code
+
+        call execute_command_line("python3 "//script//" generate-set "//dir//" -", exitstat=code)
+        if (code /= 0) error stop "zlib stream set generation failed"
+        do k = 1, 60
+            write (k_text, '(i0)') k
+            call read_file(dir//"/case-"//trim(k_text)//".raw", data)
+            call read_file(dir//"/case-"//trim(k_text)//".z", packed)
+            call decompress_zlib(packed, decoded, st)
+            if (.not. st%ok()) error stop "case "//trim(k_text)//": "//trim(st%message)
+            if (size(decoded) /= size(data)) error stop "zlib stream set: size differs"
+            if (any(decoded /= data)) error stop "zlib stream set: bytes differ"
+            call compress_zlib(data, packed, st, level=1 + mod(k, 9))
+            if (.not. st%ok()) error stop trim(st%message)
+            call write_file(dir//"/case-"//trim(k_text)//".fortio", packed)
+        end do
+        call execute_command_line("python3 "//script//" verify-set "//dir//" -", exitstat=code)
+        if (code /= 0) error stop "Python rejected a Fortio zlib stream of the set"
+    end subroutine check_stream_set
 
     !> zlib.compress(b"", 1): the decoded stream must be empty.
     subroutine check_empty_stream()
