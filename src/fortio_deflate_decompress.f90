@@ -471,11 +471,14 @@ contains
             state%status = -5
             return
         end if
+        ! LEN and NLEN are 16-bit little-endian (RFC 1951, 3.2.4)
         len = zlib_read_aligned_byte(state)
+        len = len + 256 * zlib_read_aligned_byte(state)
         if (state%status /= 0) return
         nlen = zlib_read_aligned_byte(state)
+        nlen = nlen + 256 * zlib_read_aligned_byte(state)
         if (state%status /= 0) return
-        if (len /= iand(65535 - nlen, 65535)) then
+        if (len /= 65535 - nlen) then
             state%status = -6
             return
         end if

@@ -35,6 +35,8 @@ program test_deflate
     if (any(reshape(transfer(raw, [0.0_real64]), shape(values)) /= values)) &
         error stop "shuffled roundtrip differs"
 
+    call check_stored_block()
+
     call get_command_argument(1, compressed_path)
     call get_command_argument(2, raw_path)
     call get_command_argument(3, oracle_path)
@@ -86,5 +88,34 @@ contains
         close(unit)
         if (io_status /= 0) error stop "cannot write compression fixture"
     end subroutine write_file
+
+    !> A zlib stream of one stored block (RFC 1950 and RFC 1951, 3.2.4) with a length
+    !> above 255, so both bytes of LEN and NLEN matter.
+    subroutine check_stored_block()
+        integer(int8) :: stream(2 + 5 + 300 + 4), payload(300)
+        integer(int8), allocatable :: decoded(:)
+        type(fortio_status_t) :: st
+        integer :: k, a, b
+
+        payload = [(int(mod(7 * k, 251) - 125, int8), k=1, size(payload))]
+        a = 1
+        b = 0
+        do k = 1, size(payload)
+            a = mod(a + iand(int(payload(k)), 255), 65521)
+            b = mod(b + a, 65521)
+        end do
+        stream(1:2) = [int(z'78', int8), int(z'01', int8)]
+        stream(3) = 1_int8
+        stream(4:7) = [int(44, int8), int(1, int8), int(-45, int8), int(-2, int8)]
+        stream(8:307) = payload
+        stream(308:311) = [int(b / 256 - merge(256, 0, b / 256 > 127), int8), &
+            int(mod(b, 256) - merge(256, 0, mod(b, 256) > 127), int8), &
+            int(a / 256 - merge(256, 0, a / 256 > 127), int8), &
+            int(mod(a, 256) - merge(256, 0, mod(a, 256) > 127), int8)]
+        call decompress_zlib(stream, decoded, st)
+        if (.not. st%ok()) error stop "stored block: " // st%message
+        if (size(decoded) /= size(payload)) error stop "stored block length"
+        if (any(decoded /= payload)) error stop "stored block content"
+    end subroutine check_stored_block
 
 end program test_deflate
