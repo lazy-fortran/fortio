@@ -2191,7 +2191,7 @@ contains
         end select
     end subroutine decode_real64
 
-    subroutine decode_int64(raw, t, values, status)
+    recursive subroutine decode_int64(raw, t, values, status)
         integer(int8), intent(in) :: raw(:)
         type(h5_type_t), intent(in) :: t
         integer(int64), allocatable, intent(out) :: values(:)

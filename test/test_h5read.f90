@@ -11,9 +11,11 @@ program test_h5read
     integer :: n, exit_code
 
     call get_command_argument(1, buffer, n)
-    dir = buffer(1:n)
+    dir = "build/fortio-h5read"
+    if (n > 0) dir = buffer(1:n)
     call get_command_argument(2, buffer, n)
-    script = buffer(1:n)
+    script = "test/fixtures/h5read_oracle.py"
+    if (n > 0) script = buffer(1:n)
     call execute_command_line("python3 " // script%str() // " generate " // dir%str(), &
         exitstat=exit_code)
     if (exit_code /= 0) error stop "oracle could not generate the files"
