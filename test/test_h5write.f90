@@ -14,9 +14,11 @@ program test_h5write
     type(string_t), allocatable :: labels(:)
 
     call get_command_argument(1, buffer, n)
-    path = buffer(1:n)
+    path = "build/fortio-h5write.nc"
+    if (n > 0) path = buffer(1:n)
     call get_command_argument(2, buffer, n)
-    script = buffer(1:n)
+    script = "test/fixtures/h5write_oracle.py"
+    if (n > 0) script = buffer(1:n)
 
     grid = [(0.2_real64 * i, i=0, 5)]
     field = [(real(i, real64) / 7, i=1, 18)]

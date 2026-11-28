@@ -241,7 +241,7 @@ contains
     end function normalized
 
     !> Index of a new object `path` whose parent groups are created as needed.
-    integer function add_object(this, path, kind, status) result(idx)
+    recursive integer function add_object(this, path, kind, status) result(idx)
         class(h5_writer_t), intent(inout) :: this
         character(len=*), intent(in) :: path
         integer, intent(in) :: kind
