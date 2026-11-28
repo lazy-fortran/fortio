@@ -84,6 +84,9 @@ program test_h5write
     call h5%write("/core_profiles/0/chunked_int", [(int(mod(i, 65537), int32), i=1, 5000000)], st)
     call check()
     call h5%set_deflate(0)
+    call h5%write("/core_profiles/0/al_complex", [(1.0_real64, 2.0_real64), (3.0_real64, -4.0_real64)], st, &
+        members=[character(len=9) :: "real", "imaginary"])
+    call check()
     call h5%attribute("/core_profiles/0", "names", [string("a"), string("bcd")], st)
     call check()
     call h5%attribute("/core_profiles/0", "counts", [1_int64, -2_int64], st)

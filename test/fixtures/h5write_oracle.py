@@ -46,6 +46,9 @@ with h5py.File(path, "r") as f:
     check(np.array_equal(k[1, 600:, 3], expected[1, 600:, 3]), "chunked slice")
     m = g["chunked_int"]
     check(not m.shuffle and np.array_equal(m[()], np.arange(1, 5000001) % 65537), "chunked int32")
+    q = g["al_complex"]
+    check(q.dtype.names == ("real", "imaginary"), f"complex members {q.dtype.names}")
+    check(q[1]["real"] == 3.0 and q[1]["imaginary"] == -4.0, "complex member values")
     p = g["profiles_1d"]
     check(p.shape == () and p.dtype.kind == "S" and p.dtype.itemsize == 1, "placeholder")
 
