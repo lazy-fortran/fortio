@@ -687,7 +687,6 @@ contains
         type(fortio_status_t), intent(inout) :: status
         type(wattr_t) :: a
         integer :: idx, i, s, k
-        logical :: marked
 
         idx = this%object(path)
         if (idx == 0) then
@@ -697,6 +696,13 @@ contains
         if (size(scales) /= size(this%objs(idx)%dims)) then
             call status%set(FORTIO_ESHAPE, path // ": one scale per dimension is needed")
             return
+        end if
+        if (size(scales) == 1) then
+            if (this%object(scales(1)%str()) == idx) then
+                ! a coordinate variable is the scale of its own dimension
+                call mark_scale(idx)
+                return
+            end if
         end if
         a%name = "DIMENSION_LIST"
         a%dtype = dt_vlen_reference()
@@ -708,20 +714,33 @@ contains
                 call status%set(FORTIO_ENOTFOUND, scales(i)%str() // " not found")
                 return
             end if
+            if (s == idx) then
+                call status%set(FORTIO_ESHAPE, path // " cannot be a scale of its own dimension")
+                return
+            end if
             a%refs(i) = s
+            call mark_scale(s)
+        end do
+        call this%add_attr(path, a, status)
+
+    contains
+
+        !> Mark a dataset as a coordinate variable unless it is a scale already.
+        subroutine mark_scale(s)
+            integer, intent(in) :: s
+            logical :: marked
+
             marked = .false.
             do k = 1, this%objs(s)%nattrs
                 if (this%objs(s)%attrs(k)%name == "CLASS") marked = .true.
             end do
-            if (.not. marked .and. s /= idx) then
-                call scale_text(this, scales(i)%str(), "CLASS", "DIMENSION_SCALE", status)
-                call scale_text(this, scales(i)%str(), "NAME", this%objs(s)%name%str(), status)
-                call this%attribute(scales(i)%str(), "_Netcdf4Dimid", &
-                    [int(this%next_dimid, int32)], status)
-                this%next_dimid = this%next_dimid + 1
-            end if
-        end do
-        call this%add_attr(path, a, status)
+            if (marked) return
+            call scale_text(this, this%objs(s)%path%str(), "CLASS", "DIMENSION_SCALE", status)
+            call scale_text(this, this%objs(s)%path%str(), "NAME", this%objs(s)%name%str(), status)
+            call this%attribute(this%objs(s)%path%str(), "_Netcdf4Dimid", &
+                [int(this%next_dimid, int32)], status)
+            this%next_dimid = this%next_dimid + 1
+        end subroutine mark_scale
     end subroutine writer_attach_scales
 
     ! ------------------------------------------------------------------ close

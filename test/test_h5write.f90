@@ -41,6 +41,9 @@ program test_h5write
     call h5%attach_scales("/core_profiles/0/profiles_1d.j_tor", &
         [string("/core_profiles/0/time"), string("/core_profiles/0/profiles_1d.grid.rho_tor_norm:i")], st)
     call check()
+    call h5%attach_scales("/core_profiles/0/profiles_1d.grid.rho_tor_norm:i", &
+        [string("/core_profiles/0/profiles_1d.grid.rho_tor_norm:i")], st)
+    call check()
     call h5%attribute("/core_profiles/0/profiles_1d.j_tor", "units", "A.m^-2", st)
     call check()
     call h5%attribute("/core_profiles/0/profiles_1d.j_tor", "_FillValue", [9.969209968386869e36_real64], st)
